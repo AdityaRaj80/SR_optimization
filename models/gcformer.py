@@ -120,8 +120,8 @@ class Model(nn.Module):
         # Decoder
         global_x_channel = self.linear_channel_in(global_x)
         local_x_channel = self.linear_channel_in(local_x)
-        output_channel_l = self.ff(self.decoder_channel(global_x_channel, local_x_channel, local_x_channel)) + local_x_channel
-        output_channel_g = self.ff(self.decoder_channel(local_x_channel, global_x_channel, global_x_channel)) + global_x_channel
+        output_channel_l = self.ff(self.decoder_channel(global_x_channel, local_x_channel, local_x_channel)[0]) + local_x_channel
+        output_channel_g = self.ff(self.decoder_channel(local_x_channel, global_x_channel, global_x_channel)[0]) + global_x_channel
         output_channel_l = self.norm_channel(output_channel_l.permute(0, 2, 1)).permute(0, 2, 1)
         output_channel_g = self.norm_channel(output_channel_g.permute(0, 2, 1)).permute(0, 2, 1)
         output_channel = self.atten_bias * output_channel_l + (1 - self.atten_bias) * output_channel_g
@@ -129,8 +129,8 @@ class Model(nn.Module):
 
         global_x_token = self.linear_token_in(global_x.permute(0, 2, 1))
         local_x_token = self.linear_token_in(local_x.permute(0, 2, 1))
-        output_token_l = self.ff(self.decoder_token(global_x_token, local_x_token, local_x_token)) + local_x_token
-        output_token_g = self.ff(self.decoder_token(local_x_token, global_x_token, global_x_token)) + global_x_token
+        output_token_l = self.ff(self.decoder_token(global_x_token, local_x_token, local_x_token)[0]) + local_x_token
+        output_token_g = self.ff(self.decoder_token(local_x_token, global_x_token, global_x_token)[0]) + global_x_token
         output_token_l = self.norm_token(output_token_l.permute(0, 2, 1)).permute(0, 2, 1)
         output_token_g = self.norm_token(output_token_g.permute(0, 2, 1)).permute(0, 2, 1)
         output_token = self.atten_bias * output_token_l + (1 - self.atten_bias) * output_token_g 

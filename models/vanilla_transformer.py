@@ -36,16 +36,24 @@ class Model(nn.Module):
         )
 
     def forward(self, x_enc, x_mark_enc=None):
-        # We need a dummy decoder input for Vanilla Transformer
+        # Instance normalization (RevIN-style) to handle varying stock price scales
+        means = x_enc.mean(1, keepdim=True).detach()
+        x_enc = x_enc - means
+        stdev = torch.sqrt(torch.var(x_enc, dim=1, keepdim=True, unbiased=False) + 1e-5)
+        x_enc = x_enc / stdev
+
+        # Decoder input: label tokens + zero padding for pred_len
         B = x_enc.shape[0]
         x_dec = torch.zeros([B, self.pred_len, x_enc.shape[2]], device=x_enc.device)
         x_dec = torch.cat([x_enc[:, -self.label_len:, :], x_dec], dim=1)
-        
-        # We will just pass None for x_mark_enc and x_mark_dec here since we aren't loading time features
+
         enc_out = self.enc_embedding(x_enc, None)
         enc_out, attns = self.encoder(enc_out, attn_mask=None)
 
         dec_out = self.dec_embedding(x_dec, None)
-        dec_out, _ = self.decoder(dec_out, enc_out, x_mask=None, cross_mask=None)
-        
-        return dec_out[:, -self.pred_len:, 3] # Close price
+        dec_out = self.decoder(dec_out, enc_out, x_mask=None, cross_mask=None)
+
+        # Denormalize
+        dec_out = dec_out * stdev + means
+
+        return dec_out[:, -self.pred_len:, 3]  # Close price
