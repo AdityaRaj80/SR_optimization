@@ -44,7 +44,7 @@ HORIZONS = [3, 10, 40, 120, 240]
 # All models will output [B, pred_len] (univariate future Close)
 
 PATCHTST_CONFIG = {
-    "d_model": 128,
+    "d_model": 256,
     "n_heads": 8,
     "e_layers": 6,
     "d_ff": 512,
@@ -61,7 +61,7 @@ PATCHTST_CONFIG = {
 }
 
 TFT_CONFIG = {
-    "d_model": 128,
+    "d_model": 256,
     "n_heads": 4,
     "d_ff": 256,
     "lstm_layers": 2,
@@ -80,7 +80,7 @@ ADAPATCH_CONFIG = {
 }
 
 GCFORMER_CONFIG = {
-    "d_model": 128,
+    "d_model": 256,
     "n_heads": 8,
     "e_layers": 3,
     "global_layers": 1,
@@ -117,7 +117,7 @@ ITRANSFORMER_CONFIG = {
 }
 
 VANILLA_TRANSFORMER_CONFIG = {
-    "d_model": 512,
+    "d_model": 256,
     "n_heads": 8,
     "e_layers": 2,
     "d_layers": 1,

@@ -31,14 +31,24 @@ class Model(nn.Module):
         )
 
         self.num_patches = self.seq_len // self.patch_len
-        self.num_pred_patches = self.pred_len // self.patch_len  
+        self.num_pred_patches = self.pred_len // self.patch_len
+        self.short_horizon = self.num_pred_patches == 0  # pred_len < patch_len
 
-        self.fc_predictor = nn.Sequential(
-            nn.Linear(self.hidden_dim * self.num_patches, configs['d_ff']),
-            nn.LeakyReLU(),
-            nn.Dropout(self.encoder_dropout),
-            nn.Linear(configs['d_ff'], self.hidden_dim * self.num_pred_patches),
-        )
+        if self.short_horizon:
+            # Direct projection to pred_len when pred_len < patch_len
+            self.fc_predictor = nn.Sequential(
+                nn.Linear(self.hidden_dim * self.num_patches, configs['d_ff']),
+                nn.LeakyReLU(),
+                nn.Dropout(self.encoder_dropout),
+                nn.Linear(configs['d_ff'], self.pred_len),
+            )
+        else:
+            self.fc_predictor = nn.Sequential(
+                nn.Linear(self.hidden_dim * self.num_patches, configs['d_ff']),
+                nn.LeakyReLU(),
+                nn.Dropout(self.encoder_dropout),
+                nn.Linear(configs['d_ff'], self.hidden_dim * self.num_pred_patches),
+            )
 
     def forward(self, x_in, x_mark_enc=None):
         seq_last = x_in[:, -1:, :].detach()
@@ -54,25 +64,24 @@ class Model(nn.Module):
         decoded_rec_vec = self.decoder(encoded_rec_vec)
         decoded_slice_flat = decoded_rec_vec.reshape(B_rec, C_rec, -1)
 
-        patches_pred_in = x.reshape(B, C, self.num_patches, self.patch_len)
+        L_trunc = self.num_patches * self.patch_len
+        patches_pred_in = x[:, :, :L_trunc].reshape(B, C, self.num_patches, self.patch_len)
 
         encoded_pred_vec = self.encoder(patches_pred_in)
         encoded_pred_flat = encoded_pred_vec.reshape(B, C, -1)
         prediction_latent_flat = self.fc_predictor(encoded_pred_flat)
 
-        prediction_latent_vec = prediction_latent_flat.reshape(
-            B, C, self.num_pred_patches, self.hidden_dim
-        )
+        if self.short_horizon:
+            # [B, C, pred_len] -> [B, pred_len, C]
+            y_pred = prediction_latent_flat.permute(0, 2, 1)
+        else:
+            prediction_latent_vec = prediction_latent_flat.reshape(
+                B, C, self.num_pred_patches, self.hidden_dim
+            )
+            prediction_patches_vec = self.decoder(prediction_latent_vec)
+            prediction_flat = prediction_patches_vec.reshape(B, C, -1)
+            y_pred = prediction_flat.permute(0, 2, 1)
 
-        prediction_patches_vec = self.decoder(prediction_latent_vec)
-        prediction_flat = prediction_patches_vec.reshape(B, C, -1)
-
-        y_pred = prediction_flat.permute(0, 2, 1)
         y_pred = y_pred + seq_last
-        
-        # AdaPatch returns prediction + reconstruction items, so the trainer can compute the composite loss
-        # We only predict Close price. AdaPatch's prediction shape is [B, pred_len, C]
-        # the reconstruction shapes are [B, C, -1]
-        
-        y_pred = y_pred[:, :, 3] # Extract the Close prediction
-        return y_pred, slice_orig_flat, decoded_slice_flat 
+        y_pred = y_pred[:, :, 3]  # Extract Close prediction
+        return y_pred, slice_orig_flat, decoded_slice_flat

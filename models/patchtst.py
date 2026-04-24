@@ -42,7 +42,7 @@ class Model(nn.Module):
                     d_model, configs['d_ff'], dropout=configs['dropout'], activation='gelu'
                 ) for l in range(configs['e_layers'])
             ],
-            norm_layer=nn.Sequential(nn.BatchNorm1d(d_model))
+            norm_layer=nn.LayerNorm(d_model)
         )
 
         self.head_nf = d_model * int((self.seq_len - patch_len) / stride + 2)
