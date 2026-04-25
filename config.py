@@ -35,8 +35,8 @@ NAMES_50 = [
 # ─────────────────────────────────────────────────────────────────────────────
 # Common training config
 # ─────────────────────────────────────────────────────────────────────────────
-SEQ_LEN = 252           # 1 trading year look-back
-HORIZONS = [3, 10, 40, 120, 240]
+SEQ_LEN = 504           # 2 trading years look-back (ratio >= 2x for all horizons)
+HORIZONS = [5, 20, 60, 120, 240]
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Pre-defined Hyperparameters for each model

@@ -7,7 +7,7 @@ from layers.Embed import DataEmbedding_inverted
 class Model(nn.Module):
     def __init__(self, configs):
         super(Model, self).__init__()
-        self.seq_len = 252
+        self.seq_len = configs.get('context_len', 504)
         self.pred_len = configs['pred_len']
         d_model = configs['d_model']
         enc_in = 6

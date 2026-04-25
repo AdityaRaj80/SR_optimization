@@ -8,7 +8,7 @@ class Model(nn.Module):
     def __init__(self, configs):
         super(Model, self).__init__()
         self.pred_len = configs['pred_len']
-        self.seq_len = 252
+        self.seq_len = configs.get('context_len', 504)
         self.label_len = 48
         
         enc_in = 6

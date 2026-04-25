@@ -16,7 +16,7 @@ def FFT_for_Period(x, k=2):
 class TimesBlock(nn.Module):
     def __init__(self, configs):
         super(TimesBlock, self).__init__()
-        self.seq_len = 252
+        self.seq_len = configs.get('context_len', 504)
         self.pred_len = configs['pred_len']
         self.k = configs['top_k']
         self.conv = nn.Sequential(
@@ -54,7 +54,7 @@ class TimesBlock(nn.Module):
 class Model(nn.Module):
     def __init__(self, configs):
         super(Model, self).__init__()
-        self.seq_len = 252
+        self.seq_len = configs.get('context_len', 504)
         self.pred_len = configs['pred_len']
         enc_in = 6
         d_model = configs['d_model']

@@ -20,7 +20,7 @@ class Model(nn.Module):
         # We wrap the config dict into a fake Namespace so layers/ components which expect args don't fail
         args = Namespace(**configs)
         setattr(args, "enc_in", 6)
-        setattr(args, "seq_len", 252)
+        setattr(args, "seq_len", configs.get('context_len', 504))
         setattr(args, "batch_size", 128)
         
         c_in = 6
@@ -45,7 +45,7 @@ class Model(nn.Module):
         self.enc_in = 6
         self.context_len = configs['context_len']
         self.pred_len = configs['pred_len']
-        self.seq_len = 252
+        self.seq_len = configs.get('context_len', 504)
         self.norm_type = configs['norm_type']
         self.atten_bias = configs['atten_bias']
         self.TC_bias = configs['TC_bias']

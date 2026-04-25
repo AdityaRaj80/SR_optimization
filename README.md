@@ -13,9 +13,18 @@ The core objective is to conduct a rigorous, large-scale empirical study compari
 We have structured the benchmarking framework to ensure an apple-to-apple comparison, strictly preventing data leakage and ensuring fair evaluation schemas.
 
 ### 1. Zero-Leakage Data Strategy
-- **Dataset:** 350+ stocks uniformly processed, combining historical OHLCV data with sentiment scores extracted using FinBERT.
-- **Data Split:** To ensure zero data leakage, we divide the data into a **300-stock training pool** and a **50-stock hold-out group**. The hold-out group is further chronologically split 50/50 for validation and out-of-sample testing.
-- **Forecast Horizons:** All models are evaluated across short, medium, and long-term horizons ($H \in \{3, 10, 50, 100, 200\}$).
+- **Dataset:** 351 stocks uniformly processed, combining historical OHLCV data with sentiment scores extracted using FinBERT. Stocks have a median history of **37.8 years** (min: 3.8 yrs, max: 61.9 yrs); sentiment coverage spans the full price history for all stocks.
+- **Data Split:** To ensure zero data leakage, we divide the data into a **~300-stock training pool** and a **50-stock hold-out group**. The hold-out group is further chronologically split 50/50 for validation and out-of-sample testing.
+- **Lookback Window:** `SEQ_LEN = 504` trading days (**2 calendar years**).
+- **Forecast Horizons:** $H \in \{5, 20, 60, 120, 240\}$ trading days, corresponding to approximately **1 week, 1 month, 3 months, 6 months, and 1 year** ahead. The lookback-to-horizon ratio is ≥ 2:1 for all horizons, ensuring the model always sees at least twice as much history as it is asked to predict.
+
+| Horizon | Trading Days | Real-world Period | Lookback:Horizon Ratio |
+|---------|-------------|------------------|----------------------|
+| H=5     | 5           | ~1 week          | 100:1                |
+| H=20    | 20          | ~1 month         | 25:1                 |
+| H=60    | 60          | ~3 months        | 8.4:1                |
+| H=120   | 120         | ~6 months        | 4.2:1                |
+| H=240   | 240         | ~1 year          | 2.1:1                |
 
 ### 2. Training Methodology
 - **Global-Pool vs. Sequential:** We benchmark learning paradigms by comparing Global-pool training (training a single model on the joint distribution of all stocks) versus Sequential round-based training.

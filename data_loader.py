@@ -76,14 +76,18 @@ def build_sequences(data: np.ndarray, seq_len: int, horizon: int, close_idx: int
     return np.array(X, dtype=np.float32), np.array(y, dtype=np.float32)
 
 class UnifiedDataLoader:
-    def __init__(self, seq_len=SEQ_LEN, horizon=10, batch_size=128):
+    def __init__(self, seq_len=SEQ_LEN, horizon=10, batch_size=128, max_stocks=None):
         self.seq_len = seq_len
         self.horizon = horizon
         self.batch_size = batch_size
         self.all_stocks = [os.path.basename(f).replace('.csv', '') for f in glob.glob(os.path.join(DATA_DIR, "*.csv"))]
-        
+
         self.test_stocks = [s.lower() for s in NAMES_50]
         self.train_stocks = [s for s in self.all_stocks if s.lower() not in self.test_stocks]
+
+        if max_stocks is not None:
+            self.train_stocks = self.train_stocks[:max_stocks]
+            print(f"[max_stocks={max_stocks}] Using {len(self.train_stocks)} training stock(s) for timing test.")
 
         self.test_stock_scalers = {}
 

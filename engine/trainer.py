@@ -90,21 +90,28 @@ class Trainer:
         return self.model
 
     def train_sequential(self, stock_train_loaders, val_loader, test_loader, save_path):
-        # 3 rounds
         # No early stopping to mimic catastrophic forgetting effect if present
         best_val = float('inf')
-        
+        epochs_per_stock = getattr(self.args, 'epochs_per_stock', 10)
+
         for r in range(self.args.rounds):
             t1 = time.time()
-            print(f"Starting Round {r+1}/{self.args.rounds} over {len(stock_train_loaders)} stocks")
-            
+            print(f"Starting Round {r+1}/{self.args.rounds} over {len(stock_train_loaders)} stocks "
+                  f"({epochs_per_stock} epochs/stock)")
+
             train_losses = []
             for idx, stock_loader in enumerate(stock_train_loaders):
-                loss = self.train_epoch(stock_loader)
-                train_losses.append(loss)
+                stock_t = time.time()
+                stock_losses = []
+                for ep in range(epochs_per_stock):
+                    loss = self.train_epoch(stock_loader)
+                    stock_losses.append(loss)
+                avg_loss = sum(stock_losses) / len(stock_losses)
+                train_losses.append(avg_loss)
                 if idx % 50 == 0:
-                    print(f"  Processed {idx}/{len(stock_train_loaders)} stocks")
-                    
+                    print(f"  Stock {idx}/{len(stock_train_loaders)} | "
+                          f"Avg Loss: {avg_loss:.5f} | Time: {time.time()-stock_t:.1f}s")
+
             train_loss = sum(train_losses) / len(train_losses)
             
             val_metrics = evaluate(self.model, val_loader, self.device, self.criterion)

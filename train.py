@@ -49,6 +49,8 @@ def main():
     parser.add_argument('--patience', type=int, default=10, help='Early stopping patience')
     parser.add_argument('--use_amp', action='store_true', help='Use mixed precision training')
     parser.add_argument('--adapatch_alpha', type=float, default=0.5, help='Alpha param for AdaPatch loss')
+    parser.add_argument('--epochs_per_stock', type=int, default=10, help='Epochs per stock per round in sequential training')
+    parser.add_argument('--max_stocks', type=int, default=None, help='Limit number of training stocks (for timing tests)')
     args = parser.parse_args()
 
     if args.device == 'hpc':
@@ -67,7 +69,8 @@ def main():
 
     # Load data
     print("Loading datasets...")
-    loader = UnifiedDataLoader(seq_len=SEQ_LEN, horizon=args.horizon, batch_size=args.batch_size)
+    loader = UnifiedDataLoader(seq_len=SEQ_LEN, horizon=args.horizon, batch_size=args.batch_size,
+                               max_stocks=args.max_stocks)
     val_loader, test_loader = loader.get_val_test_loaders()
     
     if val_loader is None or test_loader is None:

@@ -29,7 +29,7 @@ class series_decomp(nn.Module):
 class Model(nn.Module):
     def __init__(self, configs):
         super(Model, self).__init__()
-        self.seq_len = 252
+        self.seq_len = configs.get('context_len', 504)
         self.pred_len = configs['pred_len']
         self.decompsition = series_decomp(configs['moving_avg'])
         self.channels = configs['enc_in']

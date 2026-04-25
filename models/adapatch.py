@@ -5,7 +5,7 @@ class Model(nn.Module):
     def __init__(self, configs):
         super(Model, self).__init__()
         c_in = 6
-        self.seq_len = 252
+        self.seq_len = configs.get('context_len', 504)
         self.pred_len = configs['pred_len']
         self.patch_len = configs['slice_len']
         self.middle_dim = configs['middle_len']
