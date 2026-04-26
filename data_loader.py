@@ -1,11 +1,12 @@
 import os
 import glob
+import json
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import MinMaxScaler
 from torch.utils.data import Dataset, DataLoader
 
-from config import DATA_DIR, FEATURES, CLOSE_IDX, NAMES_50, SEQ_LEN
+from config import DATA_DIR, FEATURES, CLOSE_IDX, NAMES_50, SEQ_LEN, CACHE_DIR
 
 class TS_Dataset(Dataset):
     def __init__(self, data_x, data_y):
@@ -17,6 +18,77 @@ class TS_Dataset(Dataset):
 
     def __getitem__(self, idx):
         return self.data_x[idx], self.data_y[idx]
+
+
+class GlobalMmapDataset(Dataset):
+    """Memory-mapped Dataset for global training. Each cached stock's full,
+    pre-scaled history is mmapped from disk. The Dataset exposes one item per
+    valid (stock, start_offset) pair — exactly the same set of samples that
+    the eager `build_sequences` + concatenate path produces, in the same
+    order. Because mmap does not load the array into RAM until pages are
+    actually touched, memory footprint is O(index_size + working_set) instead
+    of O(total_dataset_size).
+
+    Args:
+        manifest_entries: list of dicts {"stock", "path", "n_rows", ...} —
+            one per cached stock, in the desired iteration order.
+        seq_len: lookback length.
+        horizon: prediction length.
+        close_idx: index of Close column in the cached arrays.
+    """
+
+    def __init__(self, manifest_entries, seq_len, horizon, close_idx):
+        self.seq_len = int(seq_len)
+        self.horizon = int(horizon)
+        self.close_idx = int(close_idx)
+
+        self._mmaps = []           # list of np.memmap, one per stock
+        # Compact index arrays (avoid Python list of tuples for memory)
+        mmap_idx_list = []
+        start_list = []
+
+        min_required = self.seq_len + self.horizon
+        for entry in manifest_entries:
+            n_rows = entry["n_rows"]
+            if n_rows < min_required:
+                continue  # match eager loader's filter exactly
+            arr = np.load(entry["path"], mmap_mode="r")
+            if arr.shape[0] != n_rows:
+                # manifest stale → trust the actual file
+                n_rows = arr.shape[0]
+            n_samples = n_rows - self.seq_len - self.horizon + 1
+            if n_samples <= 0:
+                continue
+            mmap_id = len(self._mmaps)
+            self._mmaps.append(arr)
+            mmap_idx_list.append(np.full(n_samples, mmap_id, dtype=np.int32))
+            # range(0, n_samples) — start offsets, stride=1, matches build_sequences
+            start_list.append(np.arange(n_samples, dtype=np.int64))
+
+        if not mmap_idx_list:
+            self._mmap_idx = np.zeros(0, dtype=np.int32)
+            self._start    = np.zeros(0, dtype=np.int64)
+        else:
+            self._mmap_idx = np.concatenate(mmap_idx_list)
+            self._start    = np.concatenate(start_list)
+
+    def __len__(self):
+        return len(self._mmap_idx)
+
+    def __getitem__(self, idx):
+        m_id = int(self._mmap_idx[idx])
+        s = int(self._start[idx])
+        arr = self._mmaps[m_id]
+        # Cast away from memmap → contiguous float32 (cheap, just a copy of
+        # the slice, which is small relative to the model batch). Equivalent
+        # to indexing into the eager all_X / all_y arrays.
+        X = np.array(arr[s : s + self.seq_len], dtype=np.float32, copy=True)
+        y = np.array(
+            arr[s + self.seq_len : s + self.seq_len + self.horizon, self.close_idx],
+            dtype=np.float32,
+            copy=True,
+        )
+        return X, y
 
 def _find_csv(stock: str) -> str:
     for name in [stock, stock.upper(), stock.lower()]:
@@ -157,6 +229,59 @@ class UnifiedDataLoader:
                     yield loader
             except:
                 pass
+
+    def get_global_train_loader_mmap(self, cache_dir=None, num_workers=0):
+        """Memory-mapped global loader. Scientifically equivalent to
+        `get_global_train_loader()` (same per-stock scaling, same sample order,
+        same DataLoader shuffle behaviour) but with bounded memory because
+        each cached stock is held only via numpy.memmap rather than fully
+        materialised into RAM.
+
+        Pre-condition: run `python preprocess_global_cache.py` first.
+
+        Args:
+            cache_dir: location of pre-scaled .npy files. Defaults to CACHE_DIR.
+            num_workers: passed through to DataLoader.
+
+        Returns:
+            DataLoader yielding (X, y) batches with shapes
+            ([B, seq_len, n_features], [B, horizon]).
+        """
+        cache_dir = cache_dir or CACHE_DIR
+        manifest_path = os.path.join(cache_dir, "manifest.json")
+        if not os.path.exists(manifest_path):
+            raise FileNotFoundError(
+                f"No manifest at {manifest_path}. Run "
+                f"`python preprocess_global_cache.py` first."
+            )
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+
+        # Restrict to the train_stocks set (which already excludes NAMES_50
+        # and respects --max_stocks).
+        train_set = set(self.train_stocks)
+        cached_entries = [m for m in manifest["stocks"] if m["stock"] in train_set]
+        # Preserve self.train_stocks order (matches eager loader iteration)
+        order = {s: i for i, s in enumerate(self.train_stocks)}
+        cached_entries.sort(key=lambda m: order[m["stock"]])
+
+        dataset = GlobalMmapDataset(
+            cached_entries, self.seq_len, self.horizon, CLOSE_IDX
+        )
+        if len(dataset) == 0:
+            raise ValueError(
+                "GlobalMmapDataset is empty. Either no stocks meet the "
+                "min-length requirement for this horizon, or the cache is "
+                "stale — try `python preprocess_global_cache.py --force`."
+            )
+        return DataLoader(
+            dataset,
+            batch_size=self.batch_size,
+            shuffle=True,
+            drop_last=False,
+            num_workers=num_workers,
+            pin_memory=True,
+        )
 
     def get_val_test_loaders(self):
         val_X,  val_y = [], []

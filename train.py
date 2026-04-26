@@ -51,6 +51,8 @@ def main():
     parser.add_argument('--adapatch_alpha', type=float, default=0.5, help='Alpha param for AdaPatch loss')
     parser.add_argument('--epochs_per_stock', type=int, default=20, help='Epochs per stock per round in sequential training')
     parser.add_argument('--max_stocks', type=int, default=None, help='Limit number of training stocks (for timing tests)')
+    parser.add_argument('--use_eager_global', action='store_true',
+                        help='Force the legacy in-memory global loader (default: memory-mapped streaming)')
     args = parser.parse_args()
 
     if args.device == 'hpc':
@@ -92,7 +94,19 @@ def main():
     # Train
     print(f"Starting {args.method} training...")
     if args.method == 'global':
-        train_loader = loader.get_global_train_loader()
+        if args.use_eager_global:
+            print("Using legacy eager global loader (full dataset in RAM).")
+            train_loader = loader.get_global_train_loader()
+        else:
+            print("Using memory-mapped global loader (bounded RAM).")
+            try:
+                train_loader = loader.get_global_train_loader_mmap()
+            except FileNotFoundError as e:
+                print(f"  -> {e}")
+                print("  -> Auto-building cache now...")
+                import subprocess, sys
+                subprocess.run([sys.executable, "preprocess_global_cache.py"], check=True)
+                train_loader = loader.get_global_train_loader_mmap()
         model = trainer.train_global(train_loader, val_loader, test_loader, save_path)
     elif args.method == 'sequential':
         # Pass the loader object (not a pre-built list) so the trainer can lazily

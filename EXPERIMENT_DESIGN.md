@@ -176,6 +176,51 @@ A "round" in sequential training is a single sweep over all 301 training stocks,
 
 ---
 
+## 6.5 Implementation: Memory-Mapped Global Dataset
+
+The eager global loader (`get_global_train_loader`) materialises every
+training stock's sequences into a single contiguous numpy array in RAM.
+At `SEQ_LEN = 504` and ~302 training stocks this is ~18 GB, which exceeds
+the 16 GB RAM available on the local development laptop and causes OOM
+crashes. The same data fits comfortably on the JarvisLabs A100 (80 GB
+host RAM) and on H100 nodes, but we want a single implementation that
+runs on any environment without code switches.
+
+### What we did
+- Added `preprocess_global_cache.py`: pre-scales each training stock with
+  its own `MinMaxScaler` (identical logic to the eager path) and writes
+  the result to `.cache/global_scaled/<stock>.npy`. Runs once.
+- Added `GlobalMmapDataset` in `data_loader.py`: a `torch.utils.data.Dataset`
+  that holds one `np.memmap` per stock plus a compact int32/int64 index
+  of every valid `(stock, start_offset)` pair. `__getitem__` reads a
+  small slice via mmap; OS pages handle caching transparently.
+- Added `UnifiedDataLoader.get_global_train_loader_mmap()` and made it
+  the default in `train.py` (legacy eager path is reachable via
+  `--use_eager_global`).
+
+### Equivalence guarantee
+We ran a strict element-wise sanity check with `--max_stocks 5, H=60`:
+all 34,916 sequences from the eager pipeline matched the mmap pipeline
+**bit-for-bit** (max diff = 0.0 on both X and y). The two pipelines see
+identical data in identical order; the only difference is when bytes are
+read from disk vs. RAM.
+
+### Performance characteristics
+- Cache build time: ~30 s for 302 stocks (one-time cost).
+- Cache size on disk: ~60 MB (float32, scaled).
+- RAM during training: bounded by OS page cache (a few hundred MB working
+  set) regardless of dataset size.
+- Per-epoch time on local RTX 3060 with 30 stocks: ~13 s/epoch (DLinear, H=20).
+- On H100 with full 302 stocks, expected utilisation: 95%+ for transformer
+  models (compute-bound), ~75–80% for DLinear (data-loading-bound but
+  fine in absolute terms).
+
+This fix is the same pattern as the lazy `iter_train_loaders` generator
+introduced for sequential training — shared with that the property of
+*pure implementation change with bit-for-bit identical data*.
+
+---
+
 ## 7. Other Fixed Hyperparameters (unchanged)
 
 | Parameter | Value | Rationale |

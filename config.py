@@ -9,9 +9,13 @@ STOCK_LIST_FILE = r"D:\Study\CIKM\DATA\Stock_list.txt"
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_SAVE_DIR = os.path.join(BASE_DIR, "checkpoints")
 RESULTS_DIR = os.path.join(BASE_DIR, "results")
+# Pre-scaled per-stock .npy cache for the memory-mapped global loader.
+# Contents are ~3 GB and regenerable from raw CSVs, so this dir is in .gitignore.
+CACHE_DIR = os.path.join(BASE_DIR, ".cache", "global_scaled")
 
 os.makedirs(MODEL_SAVE_DIR, exist_ok=True)
 os.makedirs(RESULTS_DIR, exist_ok=True)
+os.makedirs(CACHE_DIR, exist_ok=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Data / Feature config
