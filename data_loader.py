@@ -161,6 +161,15 @@ class UnifiedDataLoader:
     def get_val_test_loaders(self):
         val_X,  val_y = [], []
         test_X, test_y = [], []
+        # Per-sample Close-feature min/max arrays so we can inverse_transform
+        # predictions back to dollars in the evaluator (for the unscaled metrics).
+        # Each test sample comes from one specific stock and that stock's scaler
+        # determines its close_min/close_max. Preserves order — test_loader has
+        # shuffle=False so positions match.
+        test_close_min = []
+        test_close_max = []
+        val_close_min = []
+        val_close_max = []
         self.test_stock_scalers = {}
 
         for stock in self.test_stocks:
@@ -168,7 +177,7 @@ class UnifiedDataLoader:
                 data = _load_raw(stock, FEATURES)
                 if len(data) < (self.seq_len + self.horizon) * 2:
                     continue
-                
+
                 half_idx = int(len(data) * 0.5)
                 val_data = data[:half_idx]
                 test_data = data[half_idx:]
@@ -178,22 +187,35 @@ class UnifiedDataLoader:
                 test_data = scaler.transform(test_data)
                 self.test_stock_scalers[stock] = scaler
 
+                close_min = scaler.data_min_[CLOSE_IDX]
+                close_max = scaler.data_max_[CLOSE_IDX]
+
                 X_v, y_v = build_sequences(val_data, self.seq_len, self.horizon, CLOSE_IDX)
                 X_t, y_t = build_sequences(test_data, self.seq_len, self.horizon, CLOSE_IDX)
 
                 if len(X_v) > 0:
                     val_X.append(X_v)
                     val_y.append(y_v)
+                    val_close_min.append(np.full(len(X_v), close_min, dtype=np.float32))
+                    val_close_max.append(np.full(len(X_v), close_max, dtype=np.float32))
                 if len(X_t) > 0:
                     test_X.append(X_t)
                     test_y.append(y_t)
+                    test_close_min.append(np.full(len(X_t), close_min, dtype=np.float32))
+                    test_close_max.append(np.full(len(X_t), close_max, dtype=np.float32))
             except Exception as e:
                 print(f"Skipping val/test for {stock}: {e}")
-        
+
         v_ds = TS_Dataset(np.concatenate(val_X), np.concatenate(val_y)) if len(val_X) > 0 else None
         t_ds = TS_Dataset(np.concatenate(test_X), np.concatenate(test_y)) if len(test_X) > 0 else None
-        
+
         val_loader = DataLoader(v_ds, batch_size=self.batch_size, shuffle=False) if v_ds else None
         test_loader = DataLoader(t_ds, batch_size=self.batch_size, shuffle=False) if t_ds else None
+
+        # Expose per-sample inverse-scale info for evaluator
+        self.test_close_min = np.concatenate(test_close_min) if test_close_min else None
+        self.test_close_max = np.concatenate(test_close_max) if test_close_max else None
+        self.val_close_min = np.concatenate(val_close_min) if val_close_min else None
+        self.val_close_max = np.concatenate(val_close_max) if val_close_max else None
 
         return val_loader, test_loader

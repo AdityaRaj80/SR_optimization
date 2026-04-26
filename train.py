@@ -101,28 +101,42 @@ def main():
         
     print("Training complete. Evaluating on test set...")
     model.load_state_dict(torch.load(save_path))
-    test_metrics = evaluate(model, test_loader, device)
-    
-    # Save results
+    test_metrics = evaluate(
+        model, test_loader, device,
+        close_min=getattr(loader, 'test_close_min', None),
+        close_max=getattr(loader, 'test_close_max', None),
+    )
+
+    # Save results — both scaled-space (MSE/MAE/R²) and dollar-space metrics.
+    # Dollar metrics are absent if close_min/max were not exposed by the data loader.
     res_path = os.path.join(RESULTS_DIR, f"{args.method}_results.csv")
-    res_df = pd.DataFrame([{
+    row = {
         "Model": args.model,
         "Horizon": args.horizon,
         "MSE": test_metrics['mse'],
         "MAE": test_metrics['mae'],
-        "R2": test_metrics['r2']
-    }])
+        "R2":  test_metrics['r2'],
+        "MSE_USD": test_metrics.get('mse_usd', float('nan')),
+        "MAE_USD": test_metrics.get('mae_usd', float('nan')),
+        "RMSE_USD": test_metrics.get('rmse_usd', float('nan')),
+    }
+    res_df = pd.DataFrame([row])
     
-    # Robust CSV write: retry on PermissionError (file locked by Excel/etc),
-    # then fall back to a horizon-specific backup file so metrics are never lost.
+    # Robust schema-aware CSV write:
+    #   - Old CSVs may have only [Model, Horizon, MSE, MAE, R2]; new runs add USD cols.
+    #   - We read-merge-write (rather than append) so missing cols become NaN cleanly.
+    #   - Retries on PermissionError (Excel lock); falls back to a horizon-specific
+    #     backup file if the main CSV stays locked.
     import time as _time
     written = False
     for attempt in range(5):
         try:
             if os.path.exists(res_path):
-                res_df.to_csv(res_path, mode='a', header=False, index=False)
+                existing = pd.read_csv(res_path)
+                merged = pd.concat([existing, res_df], ignore_index=True)
             else:
-                res_df.to_csv(res_path, index=False)
+                merged = res_df
+            merged.to_csv(res_path, index=False)
             written = True
             break
         except PermissionError:
