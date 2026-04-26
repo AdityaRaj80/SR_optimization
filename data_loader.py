@@ -116,6 +116,10 @@ class UnifiedDataLoader:
         return DataLoader(dataset, batch_size=self.batch_size, shuffle=True, drop_last=False)
 
     def get_sequential_train_loaders(self):
+        """Eager list-build (legacy). Holds ALL stock DataLoaders in memory at once.
+        On 16 GB RAM with SEQ_LEN=504 + ~300 stocks this exceeds capacity. Prefer
+        `iter_train_loaders()` which yields one loader at a time.
+        """
         loaders = []
         for stock in self.train_stocks:
             try:
@@ -132,6 +136,27 @@ class UnifiedDataLoader:
             except:
                 pass
         return loaders
+
+    def iter_train_loaders(self):
+        """Generator yielding one stock's DataLoader at a time. Scientifically
+        equivalent to `get_sequential_train_loaders()` (same data, same order,
+        same per-loader RNG behaviour) but with O(1) memory footprint instead
+        of O(N_stocks) — only one stock's sequences are in memory at any moment.
+        """
+        for stock in self.train_stocks:
+            try:
+                data = _load_raw(stock, FEATURES)
+                if len(data) < self.seq_len + self.horizon:
+                    continue
+                scaler = MinMaxScaler(feature_range=(0, 1))
+                data = scaler.fit_transform(data)
+                X, y = build_sequences(data, self.seq_len, self.horizon, CLOSE_IDX)
+                if len(X) > 0:
+                    dataset = TS_Dataset(X, y)
+                    loader = DataLoader(dataset, batch_size=self.batch_size, shuffle=True, drop_last=False)
+                    yield loader
+            except:
+                pass
 
     def get_val_test_loaders(self):
         val_X,  val_y = [], []

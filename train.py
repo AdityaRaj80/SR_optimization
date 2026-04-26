@@ -95,8 +95,9 @@ def main():
         train_loader = loader.get_global_train_loader()
         model = trainer.train_global(train_loader, val_loader, test_loader, save_path)
     elif args.method == 'sequential':
-        stock_train_loaders = loader.get_sequential_train_loaders()
-        model = trainer.train_sequential(stock_train_loaders, val_loader, test_loader, save_path)
+        # Pass the loader object (not a pre-built list) so the trainer can lazily
+        # iter_train_loaders() one stock at a time, bounding memory to O(1).
+        model = trainer.train_sequential(loader, val_loader, test_loader, save_path)
         
     print("Training complete. Evaluating on test set...")
     model.load_state_dict(torch.load(save_path))
@@ -112,11 +113,26 @@ def main():
         "R2": test_metrics['r2']
     }])
     
-    if os.path.exists(res_path):
-        res_df.to_csv(res_path, mode='a', header=False, index=False)
-    else:
-        res_df.to_csv(res_path, index=False)
-        
+    # Robust CSV write: retry on PermissionError (file locked by Excel/etc),
+    # then fall back to a horizon-specific backup file so metrics are never lost.
+    import time as _time
+    written = False
+    for attempt in range(5):
+        try:
+            if os.path.exists(res_path):
+                res_df.to_csv(res_path, mode='a', header=False, index=False)
+            else:
+                res_df.to_csv(res_path, index=False)
+            written = True
+            break
+        except PermissionError:
+            print(f"[CSV LOCKED] attempt {attempt+1}/5 — sleeping 30s before retry...")
+            _time.sleep(30)
+    if not written:
+        backup = os.path.join(RESULTS_DIR, f"{args.method}_results_{args.model}_H{args.horizon}_backup.csv")
+        res_df.to_csv(backup, index=False)
+        print(f"[BACKUP WRITE] Main CSV still locked. Saved to: {backup}")
+
     print(f"Final Test Metrics for {args.model} (H={args.horizon}): MSE={test_metrics['mse']:.5f}, MAE={test_metrics['mae']:.5f}, R2={test_metrics['r2']:.5f}")
 
 if __name__ == "__main__":

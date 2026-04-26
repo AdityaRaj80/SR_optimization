@@ -89,18 +89,28 @@ class Trainer:
         self.model.load_state_dict(torch.load(save_path))
         return self.model
 
-    def train_sequential(self, stock_train_loaders, val_loader, test_loader, save_path):
+    def train_sequential(self, data_loader_obj, val_loader, test_loader, save_path):
+        """data_loader_obj is the UnifiedDataLoader instance. We call its
+        `iter_train_loaders()` method ONCE PER ROUND to get a fresh generator,
+        so each round re-iterates the full stock pool with only one stock's
+        DataLoader resident in memory at a time. Scientifically equivalent to
+        the previous list-based approach (same data, same order, same model
+        state propagation) but bounded memory footprint.
+        """
         # No early stopping to mimic catastrophic forgetting effect if present
         best_val = float('inf')
         epochs_per_stock = getattr(self.args, 'epochs_per_stock', 10)
+        total_stocks = len(data_loader_obj.train_stocks)
+        import gc
 
         for r in range(self.args.rounds):
             t1 = time.time()
-            print(f"Starting Round {r+1}/{self.args.rounds} over {len(stock_train_loaders)} stocks "
+            print(f"Starting Round {r+1}/{self.args.rounds} over ~{total_stocks} stocks "
                   f"({epochs_per_stock} epochs/stock)")
 
             train_losses = []
-            for idx, stock_loader in enumerate(stock_train_loaders):
+            # Fresh generator each round (generators are single-use)
+            for idx, stock_loader in enumerate(data_loader_obj.iter_train_loaders()):
                 stock_t = time.time()
                 stock_losses = []
                 for ep in range(epochs_per_stock):
@@ -109,22 +119,26 @@ class Trainer:
                 avg_loss = sum(stock_losses) / len(stock_losses)
                 train_losses.append(avg_loss)
                 if idx % 50 == 0:
-                    print(f"  Stock {idx}/{len(stock_train_loaders)} | "
+                    print(f"  Stock {idx}/{total_stocks} | "
                           f"Avg Loss: {avg_loss:.5f} | Time: {time.time()-stock_t:.1f}s")
+                # Explicit cleanup so the underlying dataset/sequences free
+                # their numpy arrays before the next stock is built.
+                del stock_loader
+                gc.collect()
 
-            train_loss = sum(train_losses) / len(train_losses)
-            
+            train_loss = sum(train_losses) / len(train_losses) if train_losses else float('nan')
+
             val_metrics = evaluate(self.model, val_loader, self.device, self.criterion)
             val_loss = val_metrics["loss"]
-            
+
             print(f"Round: {r+1} | Train Loss: {train_loss:.5f} Vali Loss: {val_loss:.5f} | Time: {time.time()-t1:.2f}s")
-            
+
             if val_loss < best_val:
                 best_val = val_loss
                 torch.save(self.model.state_dict(), save_path)
                 print(f"  Saved best model at round {r+1}")
-                
+
             adjust_learning_rate(self.optimizer, r + 1, self.args)
-            
+
         self.model.load_state_dict(torch.load(save_path))
         return self.model
