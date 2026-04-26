@@ -12,10 +12,15 @@ RESULTS_DIR = os.path.join(BASE_DIR, "results")
 # Pre-scaled per-stock .npy cache for the memory-mapped global loader.
 # Contents are ~3 GB and regenerable from raw CSVs, so this dir is in .gitignore.
 CACHE_DIR = os.path.join(BASE_DIR, ".cache", "global_scaled")
+# Pre-scaled val/test per-stock cache. Each entry is split half/half: val
+# is fit_transform on the first half, test is transform on the second
+# half using val's scaler (zero-leakage convention).
+VALTEST_CACHE_DIR = os.path.join(BASE_DIR, ".cache", "valtest_scaled")
 
 os.makedirs(MODEL_SAVE_DIR, exist_ok=True)
 os.makedirs(RESULTS_DIR, exist_ok=True)
 os.makedirs(CACHE_DIR, exist_ok=True)
+os.makedirs(VALTEST_CACHE_DIR, exist_ok=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Data / Feature config

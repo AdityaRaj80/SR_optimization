@@ -73,7 +73,19 @@ def main():
     print("Loading datasets...")
     loader = UnifiedDataLoader(seq_len=SEQ_LEN, horizon=args.horizon, batch_size=args.batch_size,
                                max_stocks=args.max_stocks)
-    val_loader, test_loader = loader.get_val_test_loaders()
+    if args.use_eager_global:
+        print("Using eager val/test loaders (full arrays in RAM).")
+        val_loader, test_loader = loader.get_val_test_loaders()
+    else:
+        print("Using memory-mapped val/test loaders (bounded RAM).")
+        try:
+            val_loader, test_loader = loader.get_val_test_loaders_mmap()
+        except FileNotFoundError as e:
+            print(f"  -> {e}")
+            print("  -> Auto-building val/test cache now...")
+            import subprocess, sys
+            subprocess.run([sys.executable, "preprocess_global_cache.py", "--only-valtest"], check=True)
+            val_loader, test_loader = loader.get_val_test_loaders_mmap()
     
     if val_loader is None or test_loader is None:
         print("Failed to initialize val/test loaders. Exiting.")

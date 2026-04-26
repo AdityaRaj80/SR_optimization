@@ -6,7 +6,7 @@ import pandas as pd
 from sklearn.preprocessing import MinMaxScaler
 from torch.utils.data import Dataset, DataLoader
 
-from config import DATA_DIR, FEATURES, CLOSE_IDX, NAMES_50, SEQ_LEN, CACHE_DIR
+from config import DATA_DIR, FEATURES, CLOSE_IDX, NAMES_50, SEQ_LEN, CACHE_DIR, VALTEST_CACHE_DIR
 
 class TS_Dataset(Dataset):
     def __init__(self, data_x, data_y):
@@ -89,6 +89,76 @@ class GlobalMmapDataset(Dataset):
             copy=True,
         )
         return X, y
+
+
+class ValTestMmapDataset(Dataset):
+    """Memory-mapped Dataset for val OR test split. Each cached test stock has
+    pre-scaled val and test arrays on disk (`<stock>__val.npy`, `<stock>__test.npy`),
+    produced by `preprocess_global_cache.py --valtest`. The split argument
+    selects which set to expose. Sample order matches the eager
+    `get_val_test_loaders` exactly: stocks in NAMES_50 lower-case order, then
+    within each stock by start_offset (stride=1).
+    """
+
+    def __init__(self, manifest_entries, seq_len, horizon, close_idx, split):
+        assert split in ("val", "test"), split
+        self.seq_len = int(seq_len)
+        self.horizon = int(horizon)
+        self.close_idx = int(close_idx)
+        self.split = split
+        self._mmaps = []
+        # Per-sample inverse-scale arrays (one entry per sample) so the
+        # evaluator can compute dollar-space metrics. close_min/max come
+        # from the val period scaler (same scaler that scaled both val and test).
+        close_min_per_sample = []
+        close_max_per_sample = []
+        mmap_idx_list = []
+        start_list = []
+
+        path_key = f"{split}_path"
+        rows_key = f"{split}_n_rows"
+        min_required = self.seq_len + self.horizon
+        for entry in manifest_entries:
+            n_rows = entry[rows_key]
+            if n_rows < min_required:
+                continue
+            arr = np.load(entry[path_key], mmap_mode="r")
+            n_samples = arr.shape[0] - self.seq_len - self.horizon + 1
+            if n_samples <= 0:
+                continue
+            mmap_id = len(self._mmaps)
+            self._mmaps.append(arr)
+            mmap_idx_list.append(np.full(n_samples, mmap_id, dtype=np.int32))
+            start_list.append(np.arange(n_samples, dtype=np.int64))
+            close_min_per_sample.append(np.full(n_samples, entry["close_min"], dtype=np.float32))
+            close_max_per_sample.append(np.full(n_samples, entry["close_max"], dtype=np.float32))
+
+        if not mmap_idx_list:
+            self._mmap_idx = np.zeros(0, dtype=np.int32)
+            self._start    = np.zeros(0, dtype=np.int64)
+            self.close_min = np.zeros(0, dtype=np.float32)
+            self.close_max = np.zeros(0, dtype=np.float32)
+        else:
+            self._mmap_idx = np.concatenate(mmap_idx_list)
+            self._start    = np.concatenate(start_list)
+            self.close_min = np.concatenate(close_min_per_sample)
+            self.close_max = np.concatenate(close_max_per_sample)
+
+    def __len__(self):
+        return len(self._mmap_idx)
+
+    def __getitem__(self, idx):
+        m_id = int(self._mmap_idx[idx])
+        s = int(self._start[idx])
+        arr = self._mmaps[m_id]
+        X = np.array(arr[s : s + self.seq_len], dtype=np.float32, copy=True)
+        y = np.array(
+            arr[s + self.seq_len : s + self.seq_len + self.horizon, self.close_idx],
+            dtype=np.float32,
+            copy=True,
+        )
+        return X, y
+
 
 def _find_csv(stock: str) -> str:
     for name in [stock, stock.upper(), stock.lower()]:
@@ -282,6 +352,48 @@ class UnifiedDataLoader:
             num_workers=num_workers,
             pin_memory=True,
         )
+
+    def get_val_test_loaders_mmap(self, cache_dir=None, num_workers=0):
+        """Memory-mapped val/test loaders. Bit-for-bit equivalent to
+        `get_val_test_loaders` (same per-stock half/half split, same val-fit
+        scaler applied to both halves, same sample order) but with bounded
+        memory: only mmap pages, plus a compact per-sample close_min/max
+        array, are resident at any time.
+
+        Pre-condition: `python preprocess_global_cache.py --valtest`.
+
+        Sets `self.test_close_min/max` and `self.val_close_min/max` so the
+        evaluator can compute dollar-space metrics, identical to the eager
+        loader's exposed attributes.
+        """
+        cache_dir = cache_dir or VALTEST_CACHE_DIR
+        manifest_path = os.path.join(cache_dir, "manifest.json")
+        if not os.path.exists(manifest_path):
+            raise FileNotFoundError(
+                f"No val/test manifest at {manifest_path}. Run "
+                f"`python preprocess_global_cache.py --only-valtest` first."
+            )
+        with open(manifest_path) as f:
+            manifest = json.load(f)
+        entries = manifest["stocks"]
+
+        v_ds = ValTestMmapDataset(entries, self.seq_len, self.horizon, CLOSE_IDX, split="val")
+        t_ds = ValTestMmapDataset(entries, self.seq_len, self.horizon, CLOSE_IDX, split="test")
+
+        val_loader = (DataLoader(v_ds, batch_size=self.batch_size, shuffle=False,
+                                 num_workers=num_workers, pin_memory=True)
+                      if len(v_ds) > 0 else None)
+        test_loader = (DataLoader(t_ds, batch_size=self.batch_size, shuffle=False,
+                                  num_workers=num_workers, pin_memory=True)
+                       if len(t_ds) > 0 else None)
+
+        # Expose inverse-scale arrays — same attribute names as eager path.
+        self.val_close_min = v_ds.close_min if len(v_ds) > 0 else None
+        self.val_close_max = v_ds.close_max if len(v_ds) > 0 else None
+        self.test_close_min = t_ds.close_min if len(t_ds) > 0 else None
+        self.test_close_max = t_ds.close_max if len(t_ds) > 0 else None
+
+        return val_loader, test_loader
 
     def get_val_test_loaders(self):
         val_X,  val_y = [], []
