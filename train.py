@@ -113,11 +113,12 @@ def main():
     row = {
         "Model": args.model,
         "Horizon": args.horizon,
-        "MSE": test_metrics['mse'],
-        "MAE": test_metrics['mae'],
-        "R2":  test_metrics['r2'],
-        "MSE_USD": test_metrics.get('mse_usd', float('nan')),
-        "MAE_USD": test_metrics.get('mae_usd', float('nan')),
+        "MSE":  test_metrics['mse'],
+        "MAE":  test_metrics['mae'],
+        "RMSE": test_metrics['rmse'],
+        "R2":   test_metrics['r2'],
+        "MSE_USD":  test_metrics.get('mse_usd',  float('nan')),
+        "MAE_USD":  test_metrics.get('mae_usd',  float('nan')),
         "RMSE_USD": test_metrics.get('rmse_usd', float('nan')),
     }
     res_df = pd.DataFrame([row])
