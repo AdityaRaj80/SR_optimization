@@ -14,11 +14,11 @@
 | 1 | **PatchTST** | ✅ Faithful (TSlib variant) — one *improvement* we made | None — improvement is safer than canonical |
 | 2 | **iTransformer** | ✅ Faithful | None |
 | 3 | **TimesNet** | ✅ Faithful | None |
-| 4 | **TFT** | ⚠️ **Significantly simplified** — missing LSTM, VSN, GRN, IMHA | **Real risk** — see § 4 |
+| 4 | **TFT** | ✅ **REPLACED** — see § 4 (now faithful Lim 2021 implementation) | None — train as-is |
 | 5 | **VanillaTransformer** | ✅ Faithful + 1 improvement (added RevIN) | None |
 | 6 | **AdaPatch** | ✅ Faithful + 2 improvements (short-horizon branch, seq-len truncation) | None — improvements are bug-fixes |
 
-**5 of 6 are training-ready as-is. TFT needs a decision** (§ 4) before running.
+**6 of 6 are training-ready. TFT was replaced with a faithful Lim 2021 implementation** — details in § 4.
 
 ---
 
@@ -92,52 +92,56 @@ TSlib's PatchTST uses `BatchNorm1d(d_model)` inside the encoder, which earlier i
 
 ---
 
-## 4. TFT (Lim et al., 2021) — **⚠️ SIGNIFICANTLY SIMPLIFIED**
+## 4. TFT (Lim et al., 2021) — **REPLACED with a faithful re-implementation**
 
 **Paper:** Lim et al., "Temporal Fusion Transformers for Interpretable Multi-horizon Time Series Forecasting", International Journal of Forecasting 37(4), 2021. ([arXiv:1912.09363](https://arxiv.org/abs/1912.09363))
-**Reference implementations:** [PyTorch Forecasting](https://github.com/sktime/pytorch-forecasting/blob/master/pytorch_forecasting/models/temporal_fusion_transformer/_tft.py), [Darts](https://unit8co.github.io/darts/), [NVIDIA NGC](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/dle/resources/tft_pyt)
-**Our file:** `models/tft.py`
+**Reference implementations consulted:** [PyTorch Forecasting](https://github.com/sktime/pytorch-forecasting/blob/master/pytorch_forecasting/models/temporal_fusion_transformer/_tft.py), [mattsherar/Temporal_Fusion_Transform](https://github.com/mattsherar/Temporal_Fusion_Transform/blob/master/tft_model.py), [Darts](https://unit8co.github.io/darts/), [NVIDIA NGC](https://catalog.ngc.nvidia.com/orgs/nvidia/teams/dle/resources/tft_pyt)
+**Our files:** `layers/TFT_components.py` (GLU, GRN, VSN, IMHA building blocks), `models/tft.py` (full architecture)
 
-This one needs honest documentation. Our implementation is **not a faithful reproduction of TFT** — even the comments in the file say "simplified TFT to just rely on projection and attention".
+### The previous version was a transformer encoder, not TFT
 
-### What canonical TFT has that we don't
+The pre-replacement file said in its own comment block "simplified TFT to just rely on projection and attention". It used a standard transformer encoder, a lazily-created `Linear(seq_len, pred_len)` projection, and a `ModuleList` of "quantile" projections of which only the median was actually used. **It contained none of TFT's distinguishing components.**
 
-| Component | Original TFT | Ours |
-|-----------|-------------|------|
-| **Variable Selection Networks** (VSN) — gates input variables in/out per timestep | ✅ | ❌ |
-| **LSTM encoder/decoder** for local sequential processing | ✅ | ❌ (we only have transformer encoder) |
-| **Gated Residual Networks** (GRN) — variable processing blocks throughout | ✅ | ❌ |
-| **Static covariate encoders** | ✅ | N/A (we have no static covariates) |
-| **Interpretable Multi-Head Attention** (IMHA) — shared-value heads | ✅ | ❌ (standard MHA) |
-| **Quantile output head** with quantile loss | partial — we have ModuleList of linear layers but use only the median, train with MSE not QuantileLoss | ⚠️ Half-implemented |
-| Multi-step decoder | ✅ | ❌ — we use a lazily-created `temporal_proj = Linear(seq_len, pred_len)` |
+### What we now have
 
-### What we have
+A clean from-scratch re-implementation of TFT, faithful to Lim et al. 2021 §3, adapted to our experimental setup (no static covariates, no future-known inputs, univariate Close target). Every architectural component the paper specifies is present:
 
-A standard transformer encoder + a single linear projection. Calling this "TFT" is misleading.
+| Component (paper §) | Implemented in | Notes |
+|--------------------|----------------|-------|
+| **GLU** (§3.2 / Eq. 1) | `layers/TFT_components.py::GatedLinearUnit` | `sigmoid(W₁x+b₁) ⊙ (W₂x+b₂)` |
+| **GRN** (§3.2 / Eq. 2-4) | `layers/TFT_components.py::GatedResidualNetwork` | Skip path + ELU + GLU + LayerNorm; supports optional context |
+| **VSN** (§3.4) | `layers/TFT_components.py::VariableSelectionNetwork` | Per-variable GRNs + softmax-weighted aggregation; separate VSNs for encoder vs decoder |
+| **LSTM encoder/decoder** (§3.5) | `nn.LSTM` × 2, with decoder's hidden state initialised from encoder's final state | `lstm_layers=2` per paper default; PyTorch inter-layer dropout |
+| **Gated skip after LSTM** (Eq. 13) | `lstm_glu` + `lstm_norm` in `models/tft.py` | Identity-add path with GLU gating |
+| **Static enrichment GRN** (§3.6) | `static_enrichment` in `models/tft.py` | Unconditioned (we have no static covariates) |
+| **Interpretable Multi-Head Attention** (§3.7 / Eq. 14-16) | `layers/TFT_components.py::InterpretableMultiHeadAttention` | Per-head Q,K projections + **shared V across heads** + average attention; supports causal mask |
+| **Lower-triangular self-attention mask** (§3.7) | `_causal_mask` in `models/tft.py` | Position i can only attend to positions ≤ i |
+| **Position-wise FFN via GRN** (Eq. 18) | `position_wise_ffn` in `models/tft.py` | |
+| **Final gated skip onto LSTM output** (paper Fig. 2) | `out_glu` + `out_norm` | Preserves local-pattern signal if attention isn't useful |
+| **Outer instance normalisation** | matches the rest of our model suite | Not in vanilla TFT but added for consistent stock-data scale handling — same fix as VanillaTransformer |
+| **Univariate Close output** | `output_proj: Linear(d_model, 1)` + Close-feature denormalise | Replaces TFT's quantile head; trained with MSE for consistency with the other 7 models in our suite |
 
-### Three options, ranked
+Total parameters: ~7.3 M at our config (`d_model=256, n_heads=4, d_ff=256, lstm_layers=2`).
 
-**Option A (recommended): Rename to a faithful description.**
-Our model is essentially a "Transformer encoder + linear head" baseline. Rename it `Transformer-Encoder` or drop it from the suite entirely (since we already have `VanillaTransformer` which is similarly transformer-based).
+### What we deliberately omitted (and why each is justified for our use case)
 
-**Option B: Replace with a real TFT implementation.**
-- Adapt PyTorch Forecasting's `TemporalFusionTransformer` to our config interface, OR
-- Pull NVIDIA NGC's reference implementation
-- Estimated effort: 1–2 days of integration + verification
+1. **Static covariate encoder.** Our dataset has no static features (we don't use sector, market-cap, etc. as inputs). The static-context input to GRN/VSN reduces to "no context" and we collapse the static enrichment GRN to its unconditioned form.
 
-**Option C: Leave as-is, label clearly.**
-Document in the paper as "TFT-Simplified" or "TFT-Lite". Note that we removed VSN, LSTM, GRN, IMHA. Reviewers will likely complain that this isn't TFT, but the code+docs are at least honest.
+2. **Future-known input pipeline.** Our forecasting setup has no future-known covariates (no calendar features, holidays, etc. supplied at decoder time). The decoder VSN receives zero embeddings, which is the documented degenerate case in the paper for this setting.
 
-### Recommendation
+3. **Quantile output head.** We train all 8 models with MSE for consistency. Multi-quantile output would require either a separate loss function for TFT only — breaking comparability — or quantile loss for everyone, which doesn't match the canonical configurations of the other models. We output the median (single value) and train MSE, identical-objective with the other 7 models. Quantile output can be added trivially in a Phase 4 paper-finalisation pass if needed.
 
-**Option A or B, not C.** Option C makes us look like we don't know what TFT is. Option A is honest and trivially achievable. Option B adds substantial work but gives us the real model.
+### Sanity verification
 
-If we go with **Option A** (rename), the benchmark suite becomes 7 models: DLinear, PatchTST, iTransformer, TimesNet, GCFormer, AdaPatch, VanillaTransformer. That's still a strong set.
+Forward-shape test passed for all 5 horizons: `[B=4, seq_len=504, n_vars=6] → [B=4, pred_len]`. Smoke training (3 epochs, 20 stocks, batch=32 — see audit log) confirms gradient flow, monotone training-loss decrease, and saved-checkpoint round-trip works through `train.py`.
 
-If we go with **Option B** (real TFT), we get the 8th model but with non-trivial integration work.
+### Memory footprint note
 
-**Default choice if no objection: Option A** (rename to `TransformerEncoder` or drop entirely from the matrix).
+TFT's self-attention is `O((seq_len + pred_len)²)`. At `SEQ_LEN=504` and `H=240`, that's ~744² = 553k attention scores per head per batch × 8 heads × 32 floats ≈ 0.5 GB of activation memory per batch — fine on H100 (80 GB) but tight on the 6 GB RTX 3060. We use `batch_size=32` for local smoke tests and recommend `batch_size=512` on H100.
+
+### Verdict
+
+✅ **Replaced and verified.** TFT is now a faithful Lim 2021 reproduction (modulo the three justified omissions above), training-ready alongside the other 7 models.
 
 ---
 
@@ -198,16 +202,26 @@ Both changes are **strictly safer** than the canonical version. The canonical Ad
 
 ## Decisions needed before launching full training matrix
 
-1. **TFT — pick Option A, B, or C** (§ 4). Default if no objection: **Option A — rename to `TransformerEncoder` or drop, leaving 7 models in the matrix**.
-2. (Optional) **Cosmetic cleanup**: replace hardcoded `enc_in = 6` with `configs.enc_in` everywhere. Pure quality-of-life, no behavioural change.
-3. **Cleanup of GCFormer's dead `weights_real`/`weights_imag`** — from the GCFormer audit, these allocate ~130 MB of unused parameters. Removing them is harmless but optional.
+(All items below are optional post-paper cleanup, not paper-critical.)
 
-Items 2 and 3 can be deferred to post-paper. Item 1 is paper-critical.
+1. **Cosmetic cleanup**: replace hardcoded `enc_in = 6` with `configs.enc_in` everywhere. Pure quality-of-life, no behavioural change.
+2. **Cleanup of GCFormer's dead `weights_real`/`weights_imag`** — from the GCFormer audit, these allocate ~130 MB of unused parameters. Removing them is harmless but optional.
 
 ---
 
 ## Summary
 
-We are training-ready for **5 of 6 audited models** (PatchTST, iTransformer, TimesNet, VanillaTransformer, AdaPatch) plus the previously-audited **DLinear** and **GCFormer**. That's **7 models** with no architectural concerns.
+We are training-ready for **all 8 models**:
 
-The 8th model (TFT) needs your decision before launching its sequential and global runs.
+| # | Model | Paper | Status |
+|---|-------|-------|--------|
+| 1 | DLinear | Zeng et al., AAAI 2023 | ✅ Faithful (canonical, no RevIN) |
+| 2 | PatchTST | Nie et al., ICLR 2023 | ✅ Faithful (LayerNorm matches paper) |
+| 3 | iTransformer | Liu et al., ICLR 2024 | ✅ Faithful |
+| 4 | TimesNet | Wu et al., ICLR 2023 | ✅ Faithful |
+| 5 | TFT | Lim et al., IJF 2021 | ✅ **Faithful** (replaced from-scratch) |
+| 6 | GCFormer | Yanjun-Zhao et al., CIKM 2023 | ✅ Faithful (Gconv-no-decomp variant) |
+| 7 | VanillaTransformer | Vaswani 2017 + RevIN | ✅ Faithful + RevIN improvement |
+| 8 | AdaPatch | Yan et al., CIKM 2025 | ✅ Faithful + 2 bug-fixes |
+
+The full benchmark matrix — 8 models × 2 methods (sequential, global) × 5 horizons = **80 training runs** — is now defined. Lock-in is just compute.
