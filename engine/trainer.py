@@ -26,7 +26,15 @@ class Trainer:
 
             if self.args.use_amp:
                 device_type = 'cuda' if self.device.type == 'cuda' else 'cpu'
-                with torch.autocast(device_type=device_type):
+                # Use bf16 on Ampere+ GPUs (compute capability >= 8.0: A100, H100, H200, RTX 30xx+).
+                # bf16 has the same dynamic range as fp32 (8-bit exponent), so it does NOT overflow
+                # in transformer attention softmax — the failure mode that caused iTransformer
+                # sequential training to NaN under fp16 AMP. fp16 fallback is kept for older GPUs.
+                if self.device.type == 'cuda' and torch.cuda.get_device_capability(self.device)[0] >= 8:
+                    amp_dtype = torch.bfloat16
+                else:
+                    amp_dtype = torch.float16
+                with torch.autocast(device_type=device_type, dtype=amp_dtype):
                     outputs = self.model(batch_x, None)
                     if isinstance(outputs, tuple):
                         if self.args.model_name == 'AdaPatch':
