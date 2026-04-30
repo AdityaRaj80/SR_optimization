@@ -1,3 +1,4 @@
+import math
 import torch
 import torch.nn as nn
 
@@ -31,8 +32,11 @@ class Model(nn.Module):
         )
 
         self.num_patches = self.seq_len // self.patch_len
-        self.num_pred_patches = self.pred_len // self.patch_len
-        self.short_horizon = self.num_pred_patches == 0  # pred_len < patch_len
+        # Use ceil so that the predicted-patch sequence is at least pred_len long
+        # (we slice down to exactly pred_len in forward). With floor, H=20/H=60
+        # at patch_len=8 produced 16/56 outputs and crashed on MSE shape mismatch.
+        self.num_pred_patches = math.ceil(self.pred_len / self.patch_len)
+        self.short_horizon = self.pred_len < self.patch_len  # pred_len < patch_len
 
         if self.short_horizon:
             # Direct projection to pred_len when pred_len < patch_len
@@ -83,5 +87,9 @@ class Model(nn.Module):
             y_pred = prediction_flat.permute(0, 2, 1)
 
         y_pred = y_pred + seq_last
+        # Slice the patch-padded prediction down to exactly pred_len timesteps.
+        # When num_pred_patches × patch_len > pred_len (non-divisible case),
+        # we need to drop the trailing padding to match the target shape.
+        y_pred = y_pred[:, :self.pred_len, :]
         y_pred = y_pred[:, :, 3]  # Extract Close prediction
         return y_pred, slice_orig_flat, decoded_slice_flat
