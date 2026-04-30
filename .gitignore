@@ -5,3 +5,13 @@ __pycache__/
 *.egg-info/
 .env
 .cache/
+
+# Model checkpoints — too large for git (~30-100 MB each, ~800 MB total).
+# Authoritative copy: BITS HPC ~/SR_optimization/checkpoints/
+# Local backup:       D:\Study\CIKM\SR_optimization\checkpoints\
+# Do NOT commit *.pth (would bloat repo and break clones).
+checkpoints/*.pth
+
+# SLURM logs / scratch
+logs/
+scripts/peek_proc.sh
