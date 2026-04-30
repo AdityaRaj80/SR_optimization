@@ -5,7 +5,10 @@ from layers.Embed import DataEmbedding
 from layers.Conv_Blocks import Inception_Block_V1
 
 def FFT_for_Period(x, k=2):
-    xf = torch.fft.rfft(x, dim=1)
+    # torch.fft.rfft does not support BFloat16/Float16 — cast to fp32 for the
+    # transform under AMP autocast. The result is real-magnitude only used to
+    # pick top-k periods (indices), so dtype of xf does not flow into grads.
+    xf = torch.fft.rfft(x.float(), dim=1)
     frequency_list = abs(xf).mean(0).mean(-1)
     frequency_list[0] = 0
     _, top_list = torch.topk(frequency_list, k)
