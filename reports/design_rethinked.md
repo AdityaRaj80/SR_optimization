@@ -291,31 +291,37 @@ Two sub-cases:
 
 ## 8. Track B: full retraining (only after Track A validates)
 
-### 8.1 Scope: all 8 models retrained with the new loss
+### 8.1 Scope: 8 models for forgetting analysis, 8 models global-only for new-loss retraining
 
-The cross-architecture story is the headline contribution — retraining only a subset would weaken the claim that the loss change generalises. So **all 8 models are in scope for Track B**, conditional on Track A passing.
+Two separate scopes by purpose:
 
-| Model | MSE baseline status (prereq) | Retrain with new loss? |
-|-------|-------------------------------|------------------------|
-| DLinear | ✅ done | ✅ |
-| iTransformer | ✅ done | ✅ |
-| GCFormer | ✅ done | ✅ |
-| PatchTST | ✅ done | ✅ |
-| AdaPatch | ✅ done (uses α=0.9 for H=120) | ✅ |
-| TFT | 🔄 in flight (4/10 done) | ✅ (after baseline finishes) |
-| **TimesNet** | ❌ **needs Phase 0 retry** | ✅ (after baseline) |
-| **VanillaTransformer** | ❌ **needs Phase 0 first run** | ✅ (after baseline) |
+**Scope A — Catastrophic-forgetting evidence (seq + glob baselines for all 8):**
+The seq < glob comparison is the paper's first claim. We need every architecture's seq vs. glob MSE/Sharpe to fill the capacity-vs-forgetting curve. Phase 0 closes the 2 gaps.
 
-8 models × 5 horizons × 2 methods = **80 retraining jobs**. At our observed pace (~4h average per job) and 3-partition parallelism (~5 concurrent), this is **~3 days wall-clock**. Walk-forward CV × 3 windows = ~9 days. **Both fit in the ICAIF timeline (13 weeks to Aug 2).**
+**Scope B — New-loss retraining (global only, all 8):**
+Sequential's role is purely as evidence for the forgetting effect — the new loss doesn't fix forgetting (it's a training-protocol issue, not an objective issue). So Track B retrains **global only**. Halves Track B compute.
 
-#### Phase 0 prerequisite — finish missing MSE baselines
+| Model | MSE baseline (Scope A) | New-loss retrain (Scope B, global) |
+|-------|-------------------------|---------------------------------------|
+| DLinear | ✅ seq + ✅ glob | ✅ |
+| iTransformer | ✅ seq + ✅ glob | ✅ |
+| GCFormer | ✅ seq + ✅ glob | ✅ |
+| PatchTST | ✅ seq + ✅ glob | ✅ |
+| AdaPatch | ✅ seq + ✅ glob (uses α=0.9 for H=120) | ✅ |
+| TFT | 🔄 in flight (4/10 done) | ✅ (after baseline) |
+| **TimesNet** | ❌ **needs Phase 0** (10 jobs queued) | ✅ (after baseline) |
+| **VanillaTransformer** | ❌ **needs Phase 0** (10 jobs queued) | ✅ (after baseline) |
 
-Before Track B can claim "8-model lift," we need MSE baselines for **TimesNet and VanillaTransformer**. Both are currently missing:
+**Track B job count:** 8 models × 5 horizons × **1 method (global)** = **40 retraining jobs** (was 80). At ~3.5h/job × 3-partition parallelism (~5 concurrent) = **~2 days wall-clock**. Walk-forward CV × 3 windows = **~6 days**.
 
-- **TimesNet**: cancelled in earlier wave at 4h elapsed; bf16 FFT cast + batch=128 + stdbuf fixes already pushed and validated. Re-queue 10 jobs (5 seq + 5 glob).
-- **VanillaTransformer**: never trained. Submit 10 jobs (5 seq + 5 glob).
+#### Phase 0 prerequisite — finish missing MSE baselines (BOTH seq + glob)
 
-20 jobs total — runs in parallel with Track A smoke test. ~3-4 days wall-clock, fits before Phase B begins.
+For Scope A (catastrophic-forgetting figure) we need TimesNet and VanillaTransformer's *full* seq + glob baselines — without sequential, the forgetting curve has 2 missing data points and the central thesis weakens.
+
+- **TimesNet**: previously cancelled at 4h; bf16 FFT cast + batch=128 + stdbuf fixes already pushed. Re-queued 10 jobs (5 seq + 5 glob).
+- **VanillaTransformer**: never trained. Submitted 10 jobs (5 seq + 5 glob).
+
+20 jobs total — runs in parallel with Track A smoke. ~3-4 days wall-clock, fits before Phase B begins.
 
 ### 8.2 Walk-forward CV (mandatory for ICAIF)
 
@@ -330,17 +336,17 @@ Report Sharpe with stability across windows. Reviewers will ask. Total: 30 retra
 
 | Phase | Duration | Deliverable |
 |-------|----------|-------------|
-| **Phase 0 — TimesNet + Vanilla MSE baselines** | 3-4 days | 20 missing-baseline checkpoints (runs in parallel with Phase A) |
+| **Phase 0 — TimesNet + Vanilla MSE baselines (seq + glob)** | 3-4 days | 20 missing-baseline checkpoints (runs in parallel with Phase A) |
 | **Phase A — Smoke test (Track A)** | 1 week | Go/no-go on kill-switch hypothesis |
 | **Phase B — `RiskAwareHead` integration on all 8 models** | 4 days | Shared head module; smoke run on PatchTST H=5 only |
 | **Phase C — Composite loss implementation** | 5 days | `engine/losses.py` module; smoke train of PatchTST H=5; verify gradient flows to all heads |
-| **Phase D — Full retrain (8 models × 5 horizons × 2 methods = 80 jobs)** | 4 days | 80 checkpoints + financial metrics |
-| **Phase E — Walk-forward CV (80 jobs × 3 windows = 240 jobs)** | 10 days | 3-window stability tables |
+| **Phase D — Full retrain, GLOBAL ONLY (8 models × 5 horizons = 40 jobs)** | 2 days | 40 checkpoints + financial metrics |
+| **Phase E — Walk-forward CV (40 jobs × 3 windows = 120 jobs)** | 6 days | 3-window stability tables |
 | **Phase F — Ablation matrix** (no/regime/uncertainty/both gate × 8 models × H=5 = 32 jobs) | 3 days | 4-cell matrix per model |
 | **Phase G — Transaction cost sweep + statistical tests** | 2 days | Net Sharpe at 5/10/20/50 bps, DM tests, bootstrap CIs |
 | **Phase H — Write-up** | 2 weeks | Paper draft + figures |
 
-**Total: ~7-8 weeks** — fits in 13 weeks to ICAIF deadline with ~5 weeks slack. If Phase E walk-forward runs over, scale back to 2 windows (covers 2020 COVID + 2022 inflation; drops the calmer 2021 window).
+**Total: ~6 weeks** — fits in 13 weeks to ICAIF deadline with ~7 weeks slack. The seq baseline jobs (Phase 0) are evidence for the forgetting claim, not retraining targets — only global gets the new loss. If Phase E walk-forward runs over, scale back to 2 windows (covers 2020 COVID + 2022 inflation; drops the calmer 2021 window).
 
 ### 8.4 Kill-paper criterion
 
