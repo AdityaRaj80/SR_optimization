@@ -291,22 +291,31 @@ Two sub-cases:
 
 ## 8. Track B: full retraining (only after Track A validates)
 
-### 8.1 Scope reduction (per critique)
+### 8.1 Scope: all 8 models retrained with the new loss
 
-`design.md` proposed retraining all 8 models with the new loss. **Rejected for ICAIF timeline.** Instead:
+The cross-architecture story is the headline contribution — retraining only a subset would weaken the claim that the loss change generalises. So **all 8 models are in scope for Track B**, conditional on Track A passing.
 
-| Model | Retrain with new loss? | Why |
-|-------|------------------------|-----|
-| **DLinear** | ✅ | Control / capacity-floor baseline |
-| **GCFormer** | ✅ | Best transformer on Sharpe (1.021 at H=5) |
-| **PatchTST** | ✅ | Best Sharpe overall (1.084 at H=5) |
-| iTransformer | ❌ | Existing 0.671 at H=5; we have full data already |
-| TimesNet | ❌ | Cancelled previously due to compute cost; not in headline |
-| AdaPatch | ❌ | Confirmed unstable training (H=120 collapse); not headline |
-| TFT | ❌ | Currently training; will have ungated baseline data |
-| Vanilla Transformer | ❌ | Not yet trained; deprioritize |
+| Model | MSE baseline status (prereq) | Retrain with new loss? |
+|-------|-------------------------------|------------------------|
+| DLinear | ✅ done | ✅ |
+| iTransformer | ✅ done | ✅ |
+| GCFormer | ✅ done | ✅ |
+| PatchTST | ✅ done | ✅ |
+| AdaPatch | ✅ done (uses α=0.9 for H=120) | ✅ |
+| TFT | 🔄 in flight (4/10 done) | ✅ (after baseline finishes) |
+| **TimesNet** | ❌ **needs Phase 0 retry** | ✅ (after baseline) |
+| **VanillaTransformer** | ❌ **needs Phase 0 first run** | ✅ (after baseline) |
 
-3 models × 5 horizons × 2 methods = **30 retraining jobs**. At our observed pace (~5h sequential, ~3.5h global per job), this is ~150 GPU-hours, finishable in 3–4 days with our parallel HPC layout. Manageable for ICAIF.
+8 models × 5 horizons × 2 methods = **80 retraining jobs**. At our observed pace (~4h average per job) and 3-partition parallelism (~5 concurrent), this is **~3 days wall-clock**. Walk-forward CV × 3 windows = ~9 days. **Both fit in the ICAIF timeline (13 weeks to Aug 2).**
+
+#### Phase 0 prerequisite — finish missing MSE baselines
+
+Before Track B can claim "8-model lift," we need MSE baselines for **TimesNet and VanillaTransformer**. Both are currently missing:
+
+- **TimesNet**: cancelled in earlier wave at 4h elapsed; bf16 FFT cast + batch=128 + stdbuf fixes already pushed and validated. Re-queue 10 jobs (5 seq + 5 glob).
+- **VanillaTransformer**: never trained. Submit 10 jobs (5 seq + 5 glob).
+
+20 jobs total — runs in parallel with Track A smoke test. ~3-4 days wall-clock, fits before Phase B begins.
 
 ### 8.2 Walk-forward CV (mandatory for ICAIF)
 
@@ -321,16 +330,17 @@ Report Sharpe with stability across windows. Reviewers will ask. Total: 30 retra
 
 | Phase | Duration | Deliverable |
 |-------|----------|-------------|
+| **Phase 0 — TimesNet + Vanilla MSE baselines** | 3-4 days | 20 missing-baseline checkpoints (runs in parallel with Phase A) |
 | **Phase A — Smoke test (Track A)** | 1 week | Go/no-go on kill-switch hypothesis |
-| **Phase B — `RiskAwareHead` integration on 3 models** | 3 days | Code merged to a `feature/risk-aware-head` branch; smoke run on PatchTST H=5 only |
+| **Phase B — `RiskAwareHead` integration on all 8 models** | 4 days | Shared head module; smoke run on PatchTST H=5 only |
 | **Phase C — Composite loss implementation** | 5 days | `engine/losses.py` module; smoke train of PatchTST H=5; verify gradient flows to all heads |
-| **Phase D — Full retrain (3 models × 5 horizons × 2 methods)** | 5 days | 30 checkpoints + financial metrics |
-| **Phase E — Walk-forward CV** | 9 days | 3-window stability table |
-| **Phase F — Ablation matrix** (no/regime/uncertainty/both gate) | 3 days | 4 × 3-model × H=5 = 12 jobs |
+| **Phase D — Full retrain (8 models × 5 horizons × 2 methods = 80 jobs)** | 4 days | 80 checkpoints + financial metrics |
+| **Phase E — Walk-forward CV (80 jobs × 3 windows = 240 jobs)** | 10 days | 3-window stability tables |
+| **Phase F — Ablation matrix** (no/regime/uncertainty/both gate × 8 models × H=5 = 32 jobs) | 3 days | 4-cell matrix per model |
 | **Phase G — Transaction cost sweep + statistical tests** | 2 days | Net Sharpe at 5/10/20/50 bps, DM tests, bootstrap CIs |
 | **Phase H — Write-up** | 2 weeks | Paper draft + figures |
 
-**Total: ~6 weeks** — fits comfortably in 13 weeks to ICAIF deadline.
+**Total: ~7-8 weeks** — fits in 13 weeks to ICAIF deadline with ~5 weeks slack. If Phase E walk-forward runs over, scale back to 2 windows (covers 2020 COVID + 2022 inflation; drops the calmer 2021 window).
 
 ### 8.4 Kill-paper criterion
 
