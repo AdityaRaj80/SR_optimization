@@ -3,8 +3,10 @@
 #SBATCH --time=12:00:00
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
+#SBATCH --exclude=gpunode5
 #SBATCH --output=/home/goyalpoonam/logs/%x_%j.out
 #SBATCH --error=/home/goyalpoonam/logs/%x_%j.err
+# gpunode5 excluded: instant-fail node (8/8 failures, 9/9 success on gpunode6).
 
 set -e
 echo "=== Host: $(hostname) | Partition: $SLURM_JOB_PARTITION | Job: $SLURM_JOB_ID | Started: $(date) ==="
