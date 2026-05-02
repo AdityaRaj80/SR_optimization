@@ -449,19 +449,46 @@ Variants reported: `long_short`, `long_only top-N`, `short_only bottom-N`. Best-
 
 ### 11.5 Empirical first hit (smoke test, May 3 2026)
 
-Cross-sectional ranking on existing MSE-trained checkpoints (zero retraining, just inference + portfolio construction):
+Cross-sectional ranking on existing MSE-trained checkpoints (zero retraining). **Calendar-aligned via intersect clipping** (see §11.6 for caveat).
 
-| Model (H=5 global) | Best top-N | Portfolio Sharpe (gross) | Portfolio MDD |
-|--------------------|-----------:|-------------------------:|--------------:|
-| **PatchTST long-short** | 15 | **6.52** | 0.040 |
-| GCFormer long-short | 15 | 6.11 | 0.142 |
-| PatchTST long-only top-N | 15 | 5.79 | 0.046 |
-| iTransformer long-short | 15 | 3.09 | 0.083 |
-| Naive equal-weight long-only | n/a | 0.60 | (TBD) |
+| Strategy (H=5 global, top-15 unless noted) | Sharpe @ 0bps | @ 10bps | @ 50bps | MDD | Calmar @10bps | Cum return |
+|--------------------------------------------|--------------:|--------:|--------:|----:|--------------:|-----------:|
+| **GCFormer long-short** ⭐ | **4.73** | **4.14** | 1.78 | 0.027 | **18.5** | +44.8% |
+| PatchTST long-only top-15 | 3.24 | 2.93 | 1.69 | **0.022** | 11.8 | +21.7% |
+| PatchTST long-short | 3.29 | 2.86 | 1.10 | 0.031 | 11.9 | +30.7% |
+| iTransformer long-short | 2.24 | 1.84 | 0.29 | 0.112 | 4.2 | +42.8% |
+| PatchTST short-only top-5 | 1.78 | 1.61 | 0.90 | 0.071 | 4.7 | +25.9% |
+| **Naive equal-weight long-only** | 2.39 | — | — | — | — | +7.7% |
 
-*Pending: full cost-sensitivity sweep (job 165711) for net-Sharpe at 5/10/20/50 bps. Initial gross-Sharpe numbers may shrink under realistic costs but retain ordering.*
+**Headline number: GCFormer cross-sectional long-short, net of 10 bps round-trip = 4.14 Sharpe.**
 
-These are 5-6× the per-stock-median Sharpe figures we previously reported — diversification within the portfolio + ranking-based signal extraction yield dramatically better risk-adjusted returns. The headline becomes ICAIF-grade.
+**Alpha vs naive (10 bps net):**
+- **GCFormer: +1.75** ← strongest deployable edge
+- PatchTST long-short: +0.47
+- iTransformer: −0.55 (underperforms naive — not a deployable strategy)
+
+**Cross-sectional IC**: GC 0.088 (ICIR 10.0), PT 0.085 (ICIR 9.3), iT 0.066 (ICIR 7.1). All within the realistic factor-IC range (0.05-0.15).
+
+This is **the new paper headline shape** — portfolio-level Sharpe with full cost sensitivity, IC + ICIR, multiple strategy variants. Per-stock-Sharpe-median (the old pre-§11 convention) is now an appendix diagnostic.
+
+### 11.6 Caveats on the May 3 numbers
+
+1. **Sample size T=37**: the calendar-aligned (intersect) panel was clipped to the shortest stock's test history (185 samples → 37 non-overlap trades at H=5). Bootstrap 95% CI on Sharpe at N=37 is roughly ±0.7. Confidence intervals will be wide. **This is the most important limitation to address in Phase E walk-forward CV** — multi-window aggregation will tighten the CI.
+
+2. **Mismatched test windows across stocks**: the 49 hold-out stocks have test sample counts ranging 185 to 7,295 (40× span). This is a quirk of how `valtest_scaled` cache was constructed. **Action item before paper draft**: review `preprocess_global_cache.py` to ensure all hold-out stocks share identical test windows. If they don't, the cross-sectional comparison is on a non-uniform universe. (Per-stock Sharpe is unaffected by this issue.)
+
+3. **Naive baseline Sharpe = 2.39**: surprisingly high. The 49 hold-out stocks happen to have a strong upward drift during the test period — possibly survivorship bias in stock selection itself. **Worth verifying with a no-strategy buy-and-hold of S&P-500 ETF over the same period as a sanity reference.**
+
+4. **GC > PT was the surprise**: PT led at per-stock-median Sharpe (1.08 vs GC 1.02), but GC dominates at portfolio level (4.73 vs 3.29). Implication: GC's graph-convolution inductive bias produces predictions whose **cross-sectional ordering** is more accurate than PT's, even when their per-stock magnitudes are comparable. This is exactly the kind of architectural insight ICAIF reviewers like.
+
+### 11.7 Decisions for the paper
+
+- **Headline cross-architecture table**: 8 models × portfolio Sharpe at 10 bps cost, calendar-aligned panel.
+- **Alpha-vs-naive column**: explicit, since absolute Sharpe is partly buoyed by the test period's drift.
+- **Per-stock Sharpe distributions**: appendix, not headline.
+- **Walk-forward 3-window CV (Phase E)**: critical for tightening CI.
+- **Cost-sensitivity curves**: in figures, not just tables.
+- **Caveat about mismatched test windows**: stated up front in §3 of the paper, fixed before submission.
 
 ---
 
