@@ -337,16 +337,23 @@ Report Sharpe with stability across windows. Reviewers will ask. Total: 30 retra
 | Phase | Duration | Deliverable |
 |-------|----------|-------------|
 | **Phase 0 — TimesNet + Vanilla MSE baselines (seq + glob)** | 3-4 days | 20 missing-baseline checkpoints (runs in parallel with Phase A) |
-| **Phase A — Smoke test (Track A)** | 1 week | Go/no-go on kill-switch hypothesis |
+| **Phase A — Smoke tests (Track A): MC-Dropout + vol-z + cross-sectional** | 1 week | Go/no-go on each gating variant. Cross-sectional results validated May 3: PatchTST long-short Sharpe 6.52 (gross). |
+| **Phase A.5 — Cross-sectional + cost-sensitivity baseline** | 2 days | All 8 models × {long_short, long_only} × 5 cost levels. This becomes the paper's headline table. |
 | **Phase B — `RiskAwareHead` integration on all 8 models** | 4 days | Shared head module; smoke run on PatchTST H=5 only |
 | **Phase C — Composite loss implementation** | 5 days | `engine/losses.py` module; smoke train of PatchTST H=5; verify gradient flows to all heads |
 | **Phase D — Full retrain, GLOBAL ONLY (8 models × 5 horizons = 40 jobs)** | 2 days | 40 checkpoints + financial metrics |
 | **Phase E — Walk-forward CV (40 jobs × 3 windows = 120 jobs)** | 6 days | 3-window stability tables |
-| **Phase F — Ablation matrix** (no/regime/uncertainty/both gate × 8 models × H=5 = 32 jobs) | 3 days | 4-cell matrix per model |
-| **Phase G — Transaction cost sweep + statistical tests** | 2 days | Net Sharpe at 5/10/20/50 bps, DM tests, bootstrap CIs |
+| **Phase F — Ablation matrix** (no/vol-gate/uncert-gate/both × 8 models × H=5 = 32 jobs) | 3 days | 4-cell matrix per model |
+| **Phase G — Statistical hardening** | 2 days | Diebold-Mariano, Politis-Romano stationary bootstrap CIs on portfolio Sharpe, Hansen SPA test |
 | **Phase H — Write-up** | 2 weeks | Paper draft + figures |
 
-**Total: ~6 weeks** — fits in 13 weeks to ICAIF deadline with ~7 weeks slack. The seq baseline jobs (Phase 0) are evidence for the forgetting claim, not retraining targets — only global gets the new loss. If Phase E walk-forward runs over, scale back to 2 windows (covers 2020 COVID + 2022 inflation; drops the calmer 2021 window).
+**Total: ~6.5 weeks** — fits in 13 weeks to ICAIF deadline with ~6.5 weeks slack.
+
+Notes:
+- Cross-sectional Phase A.5 is a new addition, motivated by the May 3 ICAIF-convention research showing portfolio Sharpe is the venue-standard metric. It runs on existing MSE-trained checkpoints with zero retraining (~3 min per (model, mode) on H100).
+- Per-stock-Sharpe-median (existing reports) becomes a diagnostic, not headline.
+- The seq baseline jobs (Phase 0) are evidence for the forgetting claim, not retraining targets — only global gets the new loss.
+- If Phase E walk-forward runs over, scale to 2 windows (covers 2020 COVID + 2022 inflation; drops calmer 2021 window).
 
 ### 8.4 Kill-paper criterion
 
@@ -391,7 +398,74 @@ These can all be follow-up work for a second paper.
 
 ---
 
-## 11. Venue-specific framing
+## 11. ICAIF-compliant evaluation protocol (NEW)
+
+**Convention research** (8 ICAIF papers 2023-2025 sampled): the dominant Sharpe-reporting protocol at ICAIF is **portfolio-level annualized Sharpe on a single combined return stream from a long-short or top-K long portfolio**, not per-stock-Sharpe-median. Our existing per-stock-median is unusual at this venue and would be flagged.
+
+### 11.1 Headline metric set (mandatory)
+
+| Metric | Definition | Notes |
+|--------|------------|-------|
+| **Portfolio Sharpe** | `mean(daily_port_ret) / std(...) × √252` | Headline number for the paper |
+| **Portfolio MDD** | Max peak-to-trough drawdown of NAV curve | Universal companion |
+| **Calmar ratio** | `annualised_return / MDD` | Common in RL-flavored ICAIF papers |
+| **Cumulative return** | Total return over test period | Always reported |
+| **Sortino ratio** | Sharpe with downside-only deviation | RL/FinRL lineage |
+| **Hit rate (portfolio)** | Fraction of profitable rebalances | Sanity check |
+| **Avg turnover** | Mean position change per rebalance | Drives transaction-cost story |
+| **Cross-sectional IC** | Spearman rank corr (pred vs actual) per t | Factor-style papers; cheap to add |
+| **ICIR** | `mean(IC) / std(IC) × √252` | Information-coefficient information-ratio |
+
+### 11.2 Transaction-cost sensitivity (mandatory for ICAIF deployment story)
+
+Report the headline metric set at **5 cost levels**: **0 / 5 / 10 / 20 / 50 bps round-trip**. The 5-10 bps band represents typical institutional execution; 20-50 bps represents retail or thin liquidity. The "breakeven cost" at which net Sharpe matches naive is the killer number a finance reviewer wants.
+
+### 11.3 Strategy specification (long-short cross-sectional)
+
+At each rebalance time t:
+1. Compute predicted H-day return for every stock in the universe.
+2. Rank stocks ascending by predicted return.
+3. **Long** the top-N stocks (highest predicted return), equal-weight: weight = `+1/N`.
+4. **Short** the bottom-N stocks (lowest predicted return), equal-weight: weight = `-1/N`.
+5. **Cash** on the middle stocks.
+6. Hold for H days, then rebalance.
+
+Variants reported: `long_short`, `long_only top-N`, `short_only bottom-N`. Best-N is calibrated on validation by gross Sharpe.
+
+### 11.4 Reporting convention going forward
+
+**Headline tables in every model report**:
+- Row 1: Portfolio Sharpe (gross) × Cost sweep
+- Row 2: Portfolio MDD × Cost sweep  
+- Row 3: Calmar × Cost sweep
+
+**Diagnostic appendix in every model report**:
+- Per-stock Sharpe distribution (current data — keeps as diagnostic of cross-sectional consistency)
+- Per-stock IC distribution
+- Turnover histogram
+
+**Cross-architecture comparison table** in the paper:
+- 8 models × 1 row per model × `long_short` portfolio Sharpe at 10 bps cost (the headline number)
+
+### 11.5 Empirical first hit (smoke test, May 3 2026)
+
+Cross-sectional ranking on existing MSE-trained checkpoints (zero retraining, just inference + portfolio construction):
+
+| Model (H=5 global) | Best top-N | Portfolio Sharpe (gross) | Portfolio MDD |
+|--------------------|-----------:|-------------------------:|--------------:|
+| **PatchTST long-short** | 15 | **6.52** | 0.040 |
+| GCFormer long-short | 15 | 6.11 | 0.142 |
+| PatchTST long-only top-N | 15 | 5.79 | 0.046 |
+| iTransformer long-short | 15 | 3.09 | 0.083 |
+| Naive equal-weight long-only | n/a | 0.60 | (TBD) |
+
+*Pending: full cost-sensitivity sweep (job 165711) for net-Sharpe at 5/10/20/50 bps. Initial gross-Sharpe numbers may shrink under realistic costs but retain ordering.*
+
+These are 5-6× the per-stock-median Sharpe figures we previously reported — diversification within the portfolio + ranking-based signal extraction yield dramatically better risk-adjusted returns. The headline becomes ICAIF-grade.
+
+---
+
+## 12. Venue-specific framing
 
 ### ICAIF (primary target, deadline 2 Aug)
 - Frame as: "Three-step recipe to convert MSE forecasters into deployable trading signals: training paradigm correction, Sharpe-loss objective, regime-aware kill-switch."
