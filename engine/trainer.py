@@ -155,7 +155,31 @@ class Trainer:
 
     # ────────────────────────────────────────────────────────────── global
     def train_global(self, train_loader, val_loader, test_loader, save_path):
-        early_stopping = EarlyStopping(patience=self.args.patience, verbose=True)
+        # Track B (composite Sharpe loss) requires running the full schedule —
+        # Phase 1 (MSE warm-up), Phase 2 (alpha=0.3), Phase 3 (alpha=0.7).
+        # Early stopping on val MSE is INCORRECT here because the composite
+        # objective is *designed* to trade some price-MSE for risk-adjusted
+        # P&L: as the Sharpe gradient activates in Phase 2/3 the price head
+        # shifts from a point-forecast minimiser to a return-direction-with-
+        # uncertainty estimator. Val MSE rising is then a feature, not a bug.
+        # We therefore DISABLE early stopping in risk-head mode and save the
+        # FINAL-epoch state (post-Phase-3) instead of the best-val-MSE one.
+        if self.use_risk_head:
+            print(f"[Trainer] Track B mode: early stopping DISABLED. "
+                  f"Will run full {self.args.epochs}-epoch schedule and save "
+                  f"final-epoch state to {save_path}.")
+            early_stopping = None
+        else:
+            early_stopping = EarlyStopping(patience=self.args.patience, verbose=True)
+
+        best_val_path = None
+        if self.use_risk_head:
+            # Also keep a parallel "best val MSE" checkpoint for diagnostics —
+            # not loaded back, but useful for ablation tables comparing
+            # final-epoch (Sharpe-trained) vs best-val (MSE-aligned) on the
+            # cross-sectional smoke pipeline.
+            best_val_path = save_path.replace(".pth", "_bestval.pth")
+            best_val_loss = float("inf")
 
         for epoch in range(self.args.epochs):
             t1 = time.time()
@@ -163,9 +187,11 @@ class Trainer:
                 self.criterion.step_epoch(epoch)
             train_loss, parts = self.train_epoch(train_loader)
 
-            # For val/test we want a *stationary* signal for early stopping —
-            # MSE on mu_close — so we explicitly pass nn.MSELoss() (the
-            # evaluator extracts mu_close automatically when output is a dict).
+            # For val/test we want a *stationary* signal — MSE on mu_close —
+            # so we explicitly pass nn.MSELoss() (the evaluator extracts
+            # mu_close automatically when output is a dict). This MSE is now
+            # only used for logging + diagnostics in Track B mode, not for
+            # early-stopping decisions.
             eval_crit = nn.MSELoss() if self.use_risk_head else self.criterion
             val_metrics = evaluate(self.model, val_loader, self.device, eval_crit)
             val_loss = val_metrics["loss"]
@@ -178,14 +204,30 @@ class Trainer:
                   f"Time: {time.time()-t1:.2f}s"
                   f"{self._format_parts(parts)}")
 
-            early_stopping(val_loss, self.model, save_path)
-            if early_stopping.early_stop:
-                print("Early stopping")
-                break
+            if early_stopping is not None:
+                early_stopping(val_loss, self.model, save_path)
+                if early_stopping.early_stop:
+                    print("Early stopping")
+                    break
+            else:
+                # Track B: save best-val-MSE for diagnostics (not loaded back).
+                if best_val_path is not None and val_loss < best_val_loss:
+                    best_val_loss = val_loss
+                    torch.save(self.model.state_dict(), best_val_path)
+                    print(f"  [diagnostic] new best val MSE {val_loss:.6f} -> "
+                          f"{os.path.basename(best_val_path)}")
 
             adjust_learning_rate(self.optimizer, epoch + 1, self.args)
 
-        self.model.load_state_dict(torch.load(save_path))
+        if early_stopping is not None:
+            # Legacy MSE path: load back the best-val checkpoint that
+            # EarlyStopping saved.
+            self.model.load_state_dict(torch.load(save_path))
+        else:
+            # Track B: persist the FINAL-epoch state. This is the
+            # Phase-3-converged model, the actual artefact we evaluate.
+            torch.save(self.model.state_dict(), save_path)
+            print(f"[Trainer] Track B final-epoch state saved -> {save_path}")
         return self.model
 
     # ────────────────────────────────────────────────────────────── sequential
