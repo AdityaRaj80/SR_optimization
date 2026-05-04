@@ -30,8 +30,9 @@ import sys
 
 from sklearn.preprocessing import MinMaxScaler
 
-from config import CACHE_DIR, VALTEST_CACHE_DIR, FEATURES, CLOSE_IDX, SEQ_LEN, HORIZONS, NAMES_50
-from data_loader import _load_raw, UnifiedDataLoader
+from config import (CACHE_DIR, VALTEST_CACHE_DIR, FEATURES, CLOSE_IDX, SEQ_LEN,
+                    HORIZONS, NAMES_50, VAL_START_DATE, TEST_START_DATE)
+from data_loader import _load_raw, _load_raw_with_dates, calendar_split, UnifiedDataLoader
 
 
 def build_train_cache(args):
@@ -115,19 +116,28 @@ def build_train_cache(args):
 
 
 def build_valtest_cache(args):
-    """Per-stock zero-leakage val/test scaling.
+    """Per-stock zero-leakage val/test scaling with CALENDAR-DATE split.
 
-    For each stock in NAMES_50: split half/half, fit scaler on val, apply to
-    both. Save val_scaled.npy and test_scaled.npy plus close_min/close_max
-    in the manifest (so dollar-space metrics can inverse_transform predictions).
+    For each stock in NAMES_50, split by global calendar dates:
+      val  = rows with VAL_START_DATE  <= date < TEST_START_DATE
+      test = rows with date >= TEST_START_DATE
+    Fit scaler on val, apply to both. Save val_scaled.npy and test_scaled.npy
+    plus close_min/close_max in the manifest. Stocks lacking enough data in
+    either window are skipped (they have a gap during the val/test period).
+
+    This replaces the previous per-stock 50/50 split which produced wildly
+    mismatched test calendar windows across stocks (185-7295 sample range).
+    Now every cached stock has the SAME val and test calendar windows, which
+    enables clean cross-sectional ranking analysis.
     """
     print(f"\n{'='*70}\nVALTEST CACHE\n{'='*70}")
     print(f"Cache dir       : {VALTEST_CACHE_DIR}")
-    # Cache as much as possible — runtime filter (per-horizon) will exclude
-    # stocks too short for a specific horizon. Use min(HORIZONS) for the
-    # cache cutoff so the smallest-horizon experiments include the most stocks.
-    min_required = 2 * (SEQ_LEN + min(HORIZONS) + 1)
-    print(f"Min required len: {min_required} (2 * (seq_len + min horizon + 1))")
+    print(f"Val window      : [{VAL_START_DATE}, {TEST_START_DATE})")
+    print(f"Test window     : [{TEST_START_DATE}, end)")
+    # Each window must individually fit at least one (seq_len + max_horizon)
+    # sample. Use max(HORIZONS) so the cache supports every horizon.
+    min_required = SEQ_LEN + max(HORIZONS) + 1
+    print(f"Min required len: {min_required} per window (seq_len + max horizon + 1)")
     print(f"Force overwrite : {args.force}")
 
     test_stocks = [s.lower() for s in NAMES_50]
@@ -147,19 +157,27 @@ def build_valtest_cache(args):
             try:
                 with open(meta_path) as f:
                     meta = json.load(f)
-                manifest.append(meta)
-                continue
+                # Validate that cached split matches current calendar config.
+                if meta.get("val_start") == VAL_START_DATE and meta.get("test_start") == TEST_START_DATE:
+                    manifest.append(meta)
+                    continue
+                else:
+                    print(f"  [info] {stock}: cached split is stale (different VAL/TEST_START), regenerating")
             except Exception as e:
                 print(f"  [warn] cached meta unreadable, regenerating: {stock} ({e})")
 
         try:
-            data = _load_raw(stock, FEATURES)
-            if len(data) < min_required:
-                skipped_short.append((stock, len(data)))
+            data, dates = _load_raw_with_dates(stock, FEATURES)
+            if dates is None:
+                skipped_error.append((stock, "no Date column for calendar split"))
                 continue
-            half = int(len(data) * 0.5)
-            val_raw = data[:half]
-            test_raw = data[half:]
+            # Include `seq_len` lookback rows BEFORE each window so the first
+            # predictable sample's target lands at val_start / test_start.
+            val_raw, val_first, test_raw, test_first = calendar_split(
+                data, dates, VAL_START_DATE, TEST_START_DATE, lookback_rows=SEQ_LEN)
+            if len(val_raw) < min_required or len(test_raw) < min_required:
+                skipped_short.append((stock, f"val={len(val_raw)}, test={len(test_raw)}"))
+                continue
             scaler = MinMaxScaler(feature_range=(0, 1))
             val_scaled = scaler.fit_transform(val_raw).astype(np.float32)
             test_scaled = scaler.transform(test_raw).astype(np.float32)
@@ -171,9 +189,13 @@ def build_valtest_cache(args):
                 "test_path": test_path,
                 "val_n_rows": int(val_scaled.shape[0]),
                 "test_n_rows": int(test_scaled.shape[0]),
+                "val_first_predict_idx": int(val_first),
+                "test_first_predict_idx": int(test_first),
                 "n_features": int(val_scaled.shape[1]),
                 "close_min": float(scaler.data_min_[CLOSE_IDX]),
                 "close_max": float(scaler.data_max_[CLOSE_IDX]),
+                "val_start": VAL_START_DATE,
+                "test_start": TEST_START_DATE,
             }
             with open(meta_path, "w") as f:
                 json.dump(meta, f, indent=2)

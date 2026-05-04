@@ -6,7 +6,8 @@ import pandas as pd
 from sklearn.preprocessing import MinMaxScaler
 from torch.utils.data import Dataset, DataLoader
 
-from config import DATA_DIR, FEATURES, CLOSE_IDX, NAMES_50, SEQ_LEN, CACHE_DIR, VALTEST_CACHE_DIR
+from config import (DATA_DIR, FEATURES, CLOSE_IDX, NAMES_50, SEQ_LEN,
+                    CACHE_DIR, VALTEST_CACHE_DIR, VAL_START_DATE, TEST_START_DATE)
 
 class TS_Dataset(Dataset):
     def __init__(self, data_x, data_y):
@@ -117,19 +118,27 @@ class ValTestMmapDataset(Dataset):
 
         path_key = f"{split}_path"
         rows_key = f"{split}_n_rows"
+        # Cache may contain a lookback prefix; only generate samples whose
+        # TARGET falls in the actual val/test window (i.e. target_idx >=
+        # first_predict_idx). Older caches without this field default to 0.
+        first_predict_key = f"{split}_first_predict_idx"
         min_required = self.seq_len + self.horizon
         for entry in manifest_entries:
             n_rows = entry[rows_key]
             if n_rows < min_required:
                 continue
             arr = np.load(entry[path_key], mmap_mode="r")
-            n_samples = arr.shape[0] - self.seq_len - self.horizon + 1
-            if n_samples <= 0:
+            first_predict_idx = int(entry.get(first_predict_key, 0))
+            # First valid sample index i must satisfy i + seq_len >= first_predict_idx
+            i_min = max(0, first_predict_idx - self.seq_len)
+            n_samples_total = arr.shape[0] - self.seq_len - self.horizon + 1
+            if n_samples_total <= i_min:
                 continue
+            n_samples = n_samples_total - i_min
             mmap_id = len(self._mmaps)
             self._mmaps.append(arr)
             mmap_idx_list.append(np.full(n_samples, mmap_id, dtype=np.int32))
-            start_list.append(np.arange(n_samples, dtype=np.int64))
+            start_list.append(np.arange(i_min, n_samples_total, dtype=np.int64))
             close_min_per_sample.append(np.full(n_samples, entry["close_min"], dtype=np.float32))
             close_max_per_sample.append(np.full(n_samples, entry["close_max"], dtype=np.float32))
 
@@ -172,6 +181,16 @@ def _find_csv(stock: str) -> str:
     raise FileNotFoundError(f"No CSV found for '{stock}' in {DATA_DIR}")
 
 def _load_raw(stock: str, feature_cols: list) -> np.ndarray:
+    """Load raw features (no dates returned). Backward-compatible signature
+    used by the global training cache. For val/test calendar-date splits,
+    use `_load_raw_with_dates` instead."""
+    data, _ = _load_raw_with_dates(stock, feature_cols)
+    return data
+
+
+def _load_raw_with_dates(stock: str, feature_cols: list):
+    """Load raw features AND aligned date array. Both have the same N rows
+    after NaN drop, in chronological order. Used by calendar-date split."""
     path = _find_csv(stock)
     df = pd.read_csv(path, low_memory=False)
 
@@ -208,7 +227,57 @@ def _load_raw(stock: str, feature_cols: list) -> np.ndarray:
     data = np.column_stack(result).astype(float)
     mask = ~np.any(np.isnan(data), axis=1)
     data = data[mask]
-    return data
+
+    if "Date" in df.columns:
+        dates = df["Date"].values[mask]
+    else:
+        # No date column → return None; caller must handle (calendar split impossible)
+        dates = None
+    return data, dates
+
+
+def calendar_split(data, dates, val_start, test_start, lookback_rows=0):
+    """Split (data, dates) into val/test arrays with optional `lookback_rows`
+    of historical context PREPENDED to each window. The split semantics are:
+
+      val_data   = up to `lookback_rows` rows immediately preceding val_start
+                 + all rows in [val_start, test_start)
+      test_data  = up to `lookback_rows` rows immediately preceding test_start
+                 + all rows from test_start onwards
+
+    Each returned array also reports `first_predict_idx` — the row offset at
+    which the actual val/test window begins (so sample-builders can skip
+    samples whose targets fall in the lookback prefix).
+
+    Returns
+    -------
+    (val_data, val_first_predict_idx, test_data, test_first_predict_idx)
+    """
+    if dates is None:
+        raise ValueError("calendar_split requires dates; CSV missing 'Date' column.")
+    val_start_ts  = pd.to_datetime(val_start,  utc=True)
+    test_start_ts = pd.to_datetime(test_start, utc=True)
+
+    # Convert dates (numpy datetime64) to pandas timestamps for comparison.
+    # pd.to_datetime returns DatetimeIndex; comparison gives ndarray of bool.
+    dates_pd = pd.to_datetime(dates, utc=True)
+    val_mask_arr = np.asarray(dates_pd >= val_start_ts)
+    test_mask_arr = np.asarray(dates_pd >= test_start_ts)
+    val_start_idx_full  = int(np.argmax(val_mask_arr))  if val_mask_arr.any()  else len(dates)
+    test_start_idx_full = int(np.argmax(test_mask_arr)) if test_mask_arr.any() else len(dates)
+
+    # Val: rows immediately before val_start (lookback) + rows in [val_start, test_start)
+    val_lo = max(0, val_start_idx_full - lookback_rows)
+    val_hi = test_start_idx_full
+    val_data = data[val_lo:val_hi]
+    val_first_predict_idx = val_start_idx_full - val_lo  # offset of first actual-val row in val_data
+
+    # Test: rows immediately before test_start (lookback) + rows from test_start to end
+    test_lo = max(0, test_start_idx_full - lookback_rows)
+    test_data = data[test_lo:]
+    test_first_predict_idx = test_start_idx_full - test_lo
+
+    return val_data, int(val_first_predict_idx), test_data, int(test_first_predict_idx)
 
 def build_sequences(data: np.ndarray, seq_len: int, horizon: int, close_idx: int, stride: int = 1):
     X, y = [], []
@@ -409,15 +478,28 @@ class UnifiedDataLoader:
         val_close_max = []
         self.test_stock_scalers = {}
 
+        min_required = self.seq_len + self.horizon
+        # Calendar-aware lookback: include `seq_len` trading days of history
+        # before each window's start so the FIRST predictable sample's target
+        # is exactly at val_start (and test_start).
+        lookback_rows = self.seq_len
         for stock in self.test_stocks:
             try:
-                data = _load_raw(stock, FEATURES)
-                if len(data) < (self.seq_len + self.horizon) * 2:
-                    continue
-
-                half_idx = int(len(data) * 0.5)
-                val_data = data[:half_idx]
-                test_data = data[half_idx:]
+                data, dates = _load_raw_with_dates(stock, FEATURES)
+                if dates is None:
+                    # Fall back to legacy 50/50 if no Date column (should not happen on FNSPID)
+                    if len(data) < min_required * 2:
+                        continue
+                    half_idx = int(len(data) * 0.5)
+                    val_data = data[:half_idx]
+                    test_data = data[half_idx:]
+                    val_first = test_first = 0
+                else:
+                    # Calendar-date split with lookback prefix.
+                    val_data, val_first, test_data, test_first = calendar_split(
+                        data, dates, VAL_START_DATE, TEST_START_DATE, lookback_rows=lookback_rows)
+                    if len(val_data) < min_required or len(test_data) < min_required:
+                        continue  # not enough data in either window for this stock
 
                 scaler = MinMaxScaler(feature_range=(0, 1))
                 val_data = scaler.fit_transform(val_data)

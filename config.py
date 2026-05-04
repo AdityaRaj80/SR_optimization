@@ -3,8 +3,12 @@ import os
 # ─────────────────────────────────────────────────────────────────────────────
 # Paths
 # ─────────────────────────────────────────────────────────────────────────────
-DATA_DIR = r"D:\Study\CIKM\DATA\350_merged"
-STOCK_LIST_FILE = r"D:\Study\CIKM\DATA\Stock_list.txt"
+if os.path.exists(r"D:\Study\CIKM\DATA\350_merged"):
+    DATA_DIR = r"D:\Study\CIKM\DATA\350_merged"
+    STOCK_LIST_FILE = r"D:\Study\CIKM\DATA\Stock_list.txt"
+else:
+    DATA_DIR = "/home/goyalpoonam/data/350_merged"
+    STOCK_LIST_FILE = "/home/goyalpoonam/data/Stock_list.txt"
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 MODEL_SAVE_DIR = os.path.join(BASE_DIR, "checkpoints")
@@ -46,6 +50,17 @@ NAMES_50 = [
 # ─────────────────────────────────────────────────────────────────────────────
 SEQ_LEN = 504           # 2 trading years look-back (ratio >= 2x for all horizons)
 HORIZONS = [5, 20, 60, 120, 240]
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Calendar-date split for val/test (FIXES the per-stock 50/50 mismatched
+# windows bug — every test stock now shares an identical val/test calendar
+# window, so cross-sectional ranking compares apples-to-apples dates).
+# ─────────────────────────────────────────────────────────────────────────────
+VAL_START_DATE  = "2022-01-01"  # val window: VAL_START <= date < TEST_START
+TEST_START_DATE = "2023-01-01"  # test window: date >= TEST_START
+# (everything before VAL_START_DATE is unused for evaluation; it is reserved
+# either for the held-out training pool or for the held-out stocks' early
+# history that the model never sees.)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Pre-defined Hyperparameters for each model
