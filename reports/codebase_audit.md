@@ -255,6 +255,36 @@ self.global_bias = nn.Parameter(torch.rand(1) * 0.1 + 0.5)  # GConv contribution
 
 ---
 
+## ICAIF Sharpe convention comparison (5 papers surveyed)
+
+After reviewing 5 representative ICAIF/quant papers (AlphaStock 2019, ListFold 2022, ChatGPT-GNN 2023, HGTAN/H-GAT 2025, FinRL Contests 2023/24), the dominant code-level conventions are:
+
+| Aspect | Dominant ICAIF norm | **Our `cross_sectional_smoke.py`** | Match? |
+|--------|---------------------|------------------------------------|:------:|
+| Annualization | `√(252/H)` for H-day non-overlap (AR/AV equivalent) | `√(252/H)` | ✅ |
+| Risk-free rate | 0 in 4/5 (ListFold uses 3%); usually `r_f=0` in code | 0 (no rf subtraction) | ✅ |
+| Overlapping samples | None apply Lo-2002 correction; most rebalance non-overlapping at H | sub-sample `[::H]` (equivalent to non-overlap rebalance) | ✅ better |
+| Transaction cost | Linear in turnover, 10-30 bps (FinRL 10 bps; ListFold 30 bps) | Linear in turnover, **0/5/10/20/50 bps sweep** | ✅ better |
+| Baseline | Buy-and-hold index (S&P 500 / DJI / CSI300) | Equal-weight long-only of holdout | ⚠️ ours is internal; should add SPY |
+| Long-short top-K | Equal weight per leg, rebalance every H | Equal weight per leg, rebalance every H | ✅ exact match |
+
+**Verdict: our Sharpe methodology is rigorous-to-slightly-more-rigorous than the ICAIF norm.** Specifically:
+
+1. The `[::H]` sub-sample handles autocorrelation inflation that **none of the 5 ICAIF papers apply Lo's correction for** — we just sidestep the issue cleanly. Some papers ignore this entirely; we don't.
+2. Our **5-level cost sweep** is more thorough than the typical single-cost ICAIF report.
+3. We use the **canonical `mean/std × √(252/H)`** with `ddof=1` sample std, exactly as `empyrical.sharpe_ratio` (the FinRL backend) does.
+4. **No risk-free rate** matches 4/5 surveyed papers.
+
+**Optional enhancement** (not a paper-blocker): report Lo's q-period correction as a sensitivity row:
+```
+SR_q = SR · q / √(q + 2 · Σ_{k=1}^{q-1} (q-k) · ρ_k)
+```
+where `ρ_k` is autocorrelation at lag k. We can compute this from the existing portfolio return series in <50 LOC. Would be a "more rigorous than the literature" claim in the paper.
+
+**Baseline issue**: 4/5 ICAIF papers use SPY/DJI/CSI300 buy-and-hold as the naive baseline; we use equal-weight of our 49-stock holdout. Our naive 2.39 isn't directly comparable. **Action: add SPY (and/or QQQ since QQQ is in our universe already) buy-and-hold over the same calendar period as a "market-comparable" baseline reference. ~30 LOC, free.**
+
+---
+
 ## Finding #7: Sharpe formula is correct
 
 ### Verification
