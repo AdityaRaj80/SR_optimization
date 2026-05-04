@@ -7,6 +7,7 @@ from config import *
 from data_loader import UnifiedDataLoader
 from engine.trainer import Trainer
 from engine.evaluator import evaluate
+from engine.heads import RiskAwareHead
 
 def get_config_for_model(model_name, horizon):
     # Base config from global config
@@ -53,6 +54,19 @@ def main():
     parser.add_argument('--max_stocks', type=int, default=None, help='Limit number of training stocks (for timing tests)')
     parser.add_argument('--use_eager_global', action='store_true',
                         help='Force the legacy in-memory global loader (default: memory-mapped streaming)')
+    parser.add_argument('--use_risk_head', action='store_true',
+                        help='Wrap backbone in RiskAwareHead (sigma + vol heads) and train with '
+                             'CompositeRiskLoss (alpha*L_SR + beta*L_NLL + gamma*L_MSE_R + '
+                             'delta*L_VOL + eta*L_GATE_BCE). Track B retraining objective.')
+    parser.add_argument('--risk_head_lookback', type=int, default=20,
+                        help='Lookback rows the sigma/vol auxiliary heads attend over.')
+    parser.add_argument('--risk_head_d_hidden', type=int, default=64,
+                        help='Hidden width of the sigma/vol auxiliary MLPs.')
+    parser.add_argument('--init_from', type=str, default=None,
+                        help='Optional path to a pre-trained checkpoint to load into the backbone '
+                             'before wrapping in RiskAwareHead (Track B fine-tune mode). '
+                             'state_dict keys without a "backbone." prefix are loaded into the '
+                             'backbone; sigma_head / vol_head are randomly initialised.')
     args = parser.parse_args()
 
     if args.device == 'hpc':
@@ -95,12 +109,43 @@ def main():
     print(f"Initializing {args.model} for horizon {args.horizon}...")
     configs = get_config_for_model(args.model, args.horizon)
     model_class = model_dict[args.model]
-    model = model_class(configs).to(device)
+    backbone = model_class(configs)
+
+    # Optionally load pre-trained MSE-only checkpoint into the backbone before
+    # wrapping (Track B fine-tune mode: keep the price-prediction weights,
+    # randomly init the new sigma/vol heads, fine-tune everything jointly).
+    if args.init_from is not None:
+        print(f"  -> loading backbone weights from {args.init_from}")
+        ckpt = torch.load(args.init_from, map_location='cpu')
+        if any(k.startswith("backbone.") for k in ckpt.keys()):
+            # Already a RiskAwareHead checkpoint — strip prefix.
+            ckpt = {k.split("backbone.", 1)[1]: v for k, v in ckpt.items()
+                    if k.startswith("backbone.")}
+        missing, unexpected = backbone.load_state_dict(ckpt, strict=False)
+        if missing:
+            print(f"     missing keys: {len(missing)} (first: {missing[:3]})")
+        if unexpected:
+            print(f"     unexpected keys: {len(unexpected)} (first: {unexpected[:3]})")
+
+    if args.use_risk_head:
+        print(f"  -> wrapping in RiskAwareHead "
+              f"(lookback={args.risk_head_lookback}, d_hidden={args.risk_head_d_hidden})")
+        model = RiskAwareHead(
+            backbone=backbone,
+            n_features=len(FEATURES),
+            pred_len=args.horizon,
+            close_idx=CLOSE_IDX,
+            lookback_for_aux=args.risk_head_lookback,
+            d_hidden=args.risk_head_d_hidden,
+        ).to(device)
+    else:
+        model = backbone.to(device)
 
     # Setup trainer
     trainer = Trainer(args, model, device)
-    
-    save_name = f"{args.model}_{args.method}_H{args.horizon}.pth"
+
+    suffix = "_riskhead" if args.use_risk_head else ""
+    save_name = f"{args.model}_{args.method}_H{args.horizon}{suffix}.pth"
     save_path = os.path.join(MODEL_SAVE_DIR, save_name)
 
     # Train
@@ -127,6 +172,8 @@ def main():
         
     print("Training complete. Evaluating on test set...")
     model.load_state_dict(torch.load(save_path))
+    # The evaluator extracts mu_close from dict outputs, so this works
+    # regardless of whether the model is risk-head-wrapped or plain.
     test_metrics = evaluate(
         model, test_loader, device,
         close_min=getattr(loader, 'test_close_min', None),
@@ -135,10 +182,12 @@ def main():
 
     # Save results — both scaled-space (MSE/MAE/R²) and dollar-space metrics.
     # Dollar metrics are absent if close_min/max were not exposed by the data loader.
-    res_path = os.path.join(RESULTS_DIR, f"{args.method}_results.csv")
+    res_suffix = "_riskhead" if args.use_risk_head else ""
+    res_path = os.path.join(RESULTS_DIR, f"{args.method}_results{res_suffix}.csv")
     row = {
         "Model": args.model,
         "Horizon": args.horizon,
+        "use_risk_head": int(bool(args.use_risk_head)),
         "MSE":  test_metrics['mse'],
         "MAE":  test_metrics['mae'],
         "RMSE": test_metrics['rmse'],
@@ -170,7 +219,7 @@ def main():
             print(f"[CSV LOCKED] attempt {attempt+1}/5 — sleeping 30s before retry...")
             _time.sleep(30)
     if not written:
-        backup = os.path.join(RESULTS_DIR, f"{args.method}_results_{args.model}_H{args.horizon}_backup.csv")
+        backup = os.path.join(RESULTS_DIR, f"{args.method}_results{res_suffix}_{args.model}_H{args.horizon}_backup.csv")
         res_df.to_csv(backup, index=False)
         print(f"[BACKUP WRITE] Main CSV still locked. Saved to: {backup}")
 

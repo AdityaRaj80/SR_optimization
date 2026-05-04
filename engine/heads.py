@@ -100,8 +100,19 @@ class RiskAwareHead(nn.Module):
 
         last_close = x_enc[:, -1, self.close_idx]                        # [B]
 
-        # H-step predicted return
-        denom = last_close.abs() + 1e-9
+        # H-step predicted return.
+        # NOTE: features are MinMax-scaled per stock to [0, 1] before training,
+        # so `last_close` lives in scaled space, NOT in dollars. For samples
+        # near a stock's historical minimum the scaled close approaches 0 and
+        # `(mu - last) / |last|` would explode. We floor |last_close| at
+        # `_RETURN_DENOM_MIN` (1% of MinMax range) so the scaled-space return is
+        # numerically bounded. This is a structural approximation: the
+        # downstream Sharpe / NLL / position-sizing terms only need a *signed,
+        # scale-stable* return signal, which this provides. Semantic
+        # dollar-space returns require threading close_min/close_max through
+        # the loss path — left for a follow-up if the floor proves too coarse.
+        _RETURN_DENOM_MIN = 1e-2
+        denom = last_close.abs().clamp(min=_RETURN_DENOM_MIN) + 1e-9
         mu_return_H = (mu_close_H - last_close) / denom                  # [B]
 
         # Auxiliary heads on last `lookback` rows

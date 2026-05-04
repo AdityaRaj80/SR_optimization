@@ -32,10 +32,18 @@ def evaluate(model, test_loader, device, criterion=None,
             batch_y = batch_y.float().to(device)
 
             # Forward pass
-            # Note: AdaPatch returns a tuple (pred, slice, decode), we only need pred
+            # Note:
+            #   * AdaPatch returns a tuple (pred, slice, decode) — first element is the prediction.
+            #   * RiskAwareHead returns a dict; "mu_close" is the back-compatible price prediction
+            #     tensor of shape [B, pred_len], which is what we score against batch_y.
             outputs = model(batch_x, None)
             if isinstance(outputs, tuple):
                 outputs = outputs[0]
+            if isinstance(outputs, dict):
+                # Score regression metrics against the price head only — the
+                # composite training loss is non-stationary across the warm-up
+                # schedule and would not be a meaningful early-stopping signal.
+                outputs = outputs["mu_close"]
 
             loss = criterion(outputs, batch_y)
             total_loss += loss.item()

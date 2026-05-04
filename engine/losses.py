@@ -35,6 +35,12 @@ import torch.nn.functional as F
 _LOG_VAR_MIN = -12.0   # σ² >= exp(-12) ≈ 6e-6   (return-space σ ~ 0.0025)
 _LOG_VAR_MAX = 4.0     # σ² <= exp(4)   ≈ 55     (return-space σ ~ 7.4)
 
+# Floor on |last_close| in scaled (MinMax) space to keep the return denominator
+# bounded. See engine/heads.py for the full rationale — features are scaled per
+# stock to [0, 1], so for samples near a stock's historical minimum the scaled
+# close approaches 0 and naive `(close_t+H - close_t) / |close_t|` explodes.
+_RETURN_DENOM_MIN = 1e-2
+
 
 class CompositeRiskLoss(nn.Module):
     """Sharpe-aware composite loss.
@@ -156,8 +162,11 @@ class CompositeRiskLoss(nn.Module):
         last_close: torch.Tensor = output["last_close"]              # [B]
 
         # H-step ahead true return derived from the supplied close sequence.
+        # Same scaled-space floor as in RiskAwareHead so the predicted and
+        # observed returns share an identical denominator for matched samples.
         true_close_H = true_close_seq[:, -1] if true_close_seq.ndim > 1 else true_close_seq
-        true_return_H = (true_close_H - last_close) / (last_close.abs() + 1e-9)
+        denom_true = last_close.abs().clamp(min=_RETURN_DENOM_MIN) + 1e-9
+        true_return_H = (true_close_H - last_close) / denom_true
 
         # Bound log-variance for autocast stability
         log_var = log_sigma2_H.clamp(min=_LOG_VAR_MIN, max=_LOG_VAR_MAX)
