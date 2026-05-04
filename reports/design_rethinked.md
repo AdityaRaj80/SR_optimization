@@ -309,7 +309,7 @@ Sequential's role is purely as evidence for the forgetting effect — the new lo
 | PatchTST | ✅ seq + ✅ glob | ✅ |
 | AdaPatch | ✅ seq + ✅ glob (uses α=0.9 for H=120) | ✅ |
 | TFT | 🔄 in flight (4/10 done) | ✅ (after baseline) |
-| **TimesNet** | ❌ **needs Phase 0** (10 jobs queued) | ✅ (after baseline) |
+| ~~TimesNet~~ | ❌ **EXCLUDED** — FFT+Inception architecture exceeds 12h SLURM limit at our 504-day input window even at batch=128. 2 retraining attempts (20 jobs total) timed out before saving any checkpoints. Disclosed in paper §3 as compute-time exclusion. | ❌ excluded |
 | **VanillaTransformer** | ❌ **needs Phase 0** (10 jobs queued) | ✅ (after baseline) |
 
 **Track B job count:** 8 models × 5 horizons × **1 method (global)** = **40 retraining jobs** (was 80). At ~3.5h/job × 3-partition parallelism (~5 concurrent) = **~2 days wall-clock**. Walk-forward CV × 3 windows = **~6 days**.
