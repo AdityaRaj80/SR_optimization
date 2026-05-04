@@ -160,6 +160,41 @@ def test_train_epoch_legacy():
     print(f"test_train_epoch_legacy: OK   loss={avg_loss:.4f}")
 
 
+def test_train_epoch_risk_head_under_autocast():
+    """Regression test: F.binary_cross_entropy is autocast-unsafe under bf16/fp16
+    and prior to the manual-BCE rewrite this branch crashed at the gate-BCE call
+    with `RuntimeError: ... binary_cross_entropy ... is unsafe to autocast`.
+    The HPC job runs with --use_amp set, so this path MUST work.
+    Skipped on CPU-only or GPUs without bf16 support.
+    """
+    if not torch.cuda.is_available():
+        print("test_train_epoch_risk_head_under_autocast: SKIP (no CUDA)")
+        return
+    if torch.cuda.get_device_capability(0)[0] < 8:
+        print("test_train_epoch_risk_head_under_autocast: SKIP (no bf16 support)")
+        return
+    device = torch.device("cuda:0")
+    pred_len = 5
+    backbone = _toy_backbone(pred_len).to(device)
+    head = RiskAwareHead(backbone, len(FEATURES), pred_len, CLOSE_IDX, 20, 16).to(device)
+    args = _make_args(use_risk_head=True)
+    trainer = Trainer(args, head, device)
+    trainer.criterion.step_epoch(0)
+    loader = _make_loader(B=16, pred_len=pred_len, batch_size=8)
+    # Move loader tensors to device on the fly inside the trainer.
+    # Do one step manually with autocast to mirror Trainer.train_epoch's bf16 path.
+    head.train()
+    for batch_x, batch_y in loader:
+        batch_x = batch_x.to(device); batch_y = batch_y.to(device)
+        with torch.autocast(device_type='cuda', dtype=torch.bfloat16):
+            loss, parts = trainer._forward_loss(batch_x, batch_y)
+        assert torch.isfinite(loss), f"autocast loss non-finite: {loss}"
+        loss.backward()
+        break
+    print(f"test_train_epoch_risk_head_under_autocast: OK   "
+          f"loss={loss.item():.4f} L_GATE_BCE={parts['L_GATE_BCE']:.4f}")
+
+
 def test_evaluate_dict_output():
     pred_len = 5
     backbone = _toy_backbone(pred_len)
@@ -180,5 +215,6 @@ if __name__ == "__main__":
     test_trainer_init_legacy()
     test_train_epoch_risk_head()
     test_train_epoch_legacy()
+    test_train_epoch_risk_head_under_autocast()
     test_evaluate_dict_output()
     print("\nAll Phase D wiring tests PASS.")

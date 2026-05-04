@@ -201,9 +201,19 @@ class CompositeRiskLoss(nn.Module):
         L_SR_gated = -(sr_mean / sr_std)
 
         # ─── L_GATE_BCE: gate should match realized profitability ───
+        # We compute BCE manually (mathematically identical to
+        # `F.binary_cross_entropy(gate, target)`) because the fused PyTorch
+        # kernel is autocast-unsafe under bf16/fp16: it raises
+        # "binary_cross_entropy is unsafe to autocast" and refuses to run.
+        # The manual form uses torch.log + arithmetic which ARE autocast-safe.
+        # Recommendation in the docs is to use BCEWithLogits, but our gate is
+        # already a product of two sigmoids and is reused downstream as a
+        # multiplicative weight on returns, so we keep the sigmoid form and
+        # implement BCE inline.
         profitable = (position * true_return_H > 0).float()          # [B] target
         gate_clamped = gate.clamp(1e-6, 1.0 - 1e-6)
-        L_GATE_BCE = F.binary_cross_entropy(gate_clamped, profitable)
+        L_GATE_BCE = -(profitable * torch.log(gate_clamped) +
+                       (1.0 - profitable) * torch.log(1.0 - gate_clamped)).mean()
 
         # ─── Composite ───
         L_total = (
