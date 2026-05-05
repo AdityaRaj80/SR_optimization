@@ -2,7 +2,14 @@
 
 **Date:** 2026-05-05
 **Universe:** GCFormer (Stage 1 of the Sharpe-loss campaign)
-**Status:** Stage 1 (single backbone) complete on GCFormer; results are statistically validated for H=60 (p<0.001), directionally consistent at H=5, mixed at H=20. Long-horizon claims (H ≥ 120) are deferred to Stage 2 (FNSPID dataset extension to 2024–2025) where the extended test window restores statistical power; Stage-1 long-horizon point estimates are reported in §A.1 for transparency.
+**Status:** Stage 1 (single backbone) complete on GCFormer; results are statistically validated for H=60 (p<0.001), directionally consistent at H=5, mixed at H=20.
+
+**Three-stage robustness roadmap** (each stage strictly stronger than the previous, sequenced by cost-impact):
+* **Stage 1** (cheap fan-out, in-progress): replicate H=5/20/60 result on the other 6 backbones — addresses architecture concern.
+* **Stage 2** (zero-retrain, ~1 week): re-evaluate frozen checkpoints on the FNSPID dataset extended to 2024–2025 via the official Nasdaq scraper [8] — addresses out-of-time concern, also functions as the paper's data contribution. Restores statistical power for H ≥ 120.
+* **Stage 3** (one-shot expensive, ~3 days HPC, planned): walk-forward CV across 3 rolling 1-year test windows on a **delisting-aware bias-free universe** for the top 1–2 winners. Combines temporal robustness × universe robustness in a single stage — addresses survivorship bias *and* regime dependence.
+
+Stage-1 long-horizon point estimates are reported in §A.1 for transparency; they are *not* in the headline tables because the current test window is below the non-overlap-sample-count threshold for stable Sharpe inference at H ≥ 120.
 
 ---
 
@@ -186,15 +193,30 @@ Adding 12 months of 2025 data extends the test window from ~504 → ~756 trading
 
 This stage **also functions as the "data contribution" of the paper** (extending the FNSPID corpus is itself a deliverable).
 
-### 7.3 Survivorship-biased universe — Stage 3 (bias-free robustness)
+### 7.3 Survivorship-biased universe **AND** single test window — Stage 3 (combined)
 
-NAMES_50 is hand-picked from stocks that survived the entire FNSPID coverage period; this inflates absolute Sharpe for **both** Track B and the MSE baseline equally. The expected behaviour is that the *delta* (Track B − MSE) survives on a delisting-aware universe but absolute numbers drop. Stage 3 retrains the top 1–2 winners from §7.1 on a bias-free universe and reports the robustness table as Section 5.2 of the paper.
+This stage tests the two heaviest reviewer concerns *simultaneously* — universe robustness and temporal robustness — because they share the same incremental cost: any test on a new universe requires retraining, and any walk-forward window also requires retraining, so we may as well combine them.
 
-This stage is intentionally last because (a) it's a robustness check, not a confirmatory experiment, and (b) we want to be sure the *strategy* (architecture + loss + inference) is the right one before committing further HPC.
+**The two questions it answers:**
 
-### 7.4 Walk-forward CV — open question
+1. *Universe robustness.* NAMES_50 is hand-picked from stocks that survived the entire FNSPID coverage period; this inflates absolute Sharpe for **both** Track B and the MSE baseline equally. The expected behaviour is that the *delta* (Track B − MSE) survives on a delisting-aware universe but absolute numbers drop.
+2. *Temporal robustness.* Bootstrap CI (§5) and the FNSPID extension (§7.2) give us within-window and one-step out-of-time evidence respectively. Walk-forward cross-validation rolls the train / val / test windows forward across multiple calendar regimes, asking: does the Track B advantage replicate on independent calendar slices, or did 2023-2024 happen to favour it?
 
-Multi-window walk-forward CV is the strongest test of temporal robustness, but it's the most expensive (N× retraining cost). FNSPID extension (§7.2) partially substitutes for this by giving us a second held-out window. If §7.1 + §7.2 + §7.3 produce consistent positive deltas, walk-forward CV becomes optional rather than required. Decision deferred to post-Stage-3.
+**Design.** Walk-forward with **3 rolling windows**, train length ~5 years per window, val 1 year, test 1 year, advancing by 1 year per window. Top 1–2 winners from §7.1 only. Both arms (MSE baseline + Track B) per window. Headline horizons H ∈ {5, 20, 60} only — at 1-year test windows H ≥ 120 is back below the non-overlap-sample threshold (Stage 2 covers long horizons via the extended single window instead).
+
+**Cost.** 3 windows × 2 models × 3 horizons × 2 arms = **36 retrains**, ~3 days HPC. Each window's retrain reuses the existing `scripts/riskhead_glob.sbatch` pipeline with only the train / val / test date cutoffs changed.
+
+**Reporting.** Per-window per-(model, horizon, arm) Sharpe + paired-bootstrap on the difference, then a pooled across-window meta-bootstrap (per Politis & Romano subsampling, [1]) to get a single ΔSharpe estimate with both within-window and cross-window uncertainty. The headline robustness claim becomes:
+
+> "Across three independent rolling 1-year test windows on a delisting-aware bias-free universe, Track B + risk-aware delivers a pooled ΔSharpe of X.XX [95% CI: Y, Z] vs the MSE baseline at H=60, p<X.XX (paired stationary bootstrap, 5000 reps within-window × 3 windows)."
+
+**Why this stage is intentionally last.**
+
+* (a) it's a confirmatory robustness check, not an exploratory experiment — only worth running once we're confident the *strategy* (architecture + loss + inference) is the right one;
+* (b) cost-impact: at ~3 days of HPC, this is the most expensive single stage, so we want maximum prior evidence (Stage 1 + Stage 2 deltas) that it's worth running;
+* (c) combining universe + walk-forward into a single stage is the cheapest way to deliver both pieces of evidence — neither is meaningful alone for ICAIF reviewers.
+
+**What "walk-forward CV" actually means here.** It is *not* the same as a sliding train/val/test split *within* one fixed dataset (which is what a regular ML CV does and what we already do via the calendar-aligned val/test split). Walk-forward in finance means: independently retraining on calendar window 1, testing on window 2; independently retraining on window 1+2, testing on window 3; etc. Each window's test set is held out at training time, so it's a true out-of-sample test repeated across regimes. See §8 for the bootstrap-vs-walk-forward distinction in full.
 
 ### 7.5 Bootstrap CI is on gross returns, not net
 
@@ -206,19 +228,21 @@ See §A.1 for the test-window arithmetic. H=120 gets ~4 non-overlap rebalances o
 
 ---
 
-## 8. Distinction: bootstrap CI vs walk-forward CV
+## 8. Three-stage robustness pyramid: bootstrap CI ⊂ FNSPID extension ⊂ walk-forward CV
 
-These answer different questions and are NOT the same as a sliding train/val/test split:
+Each row tests a strictly stronger generalisation claim than the row above. The campaign is sequenced bottom-to-top because each higher row is more expensive than the one below it, and each row's value depends on the rows below it confirming the underlying signal first.
 
-| | Bootstrap CI (now) | Walk-forward CV (later) |
-|---|---|---|
-| **Question** | "Given this single test window, how confident are we in the Sharpe estimate?" | "Does this method work across different calendar windows, or did we get lucky?" |
-| **Mechanism** | Resamples the same test return series with replacement, preserving serial correlation via stationary block resampling [1] | Trains on window 1 → tests on window 2 → trains on window 1+2 → tests on window 3 → … |
-| **Cost** | Cheap — runs in seconds on existing test outputs | Expensive — N× retraining cost (one full Track B campaign per window) |
-| **Tests** | Sampling uncertainty within a fixed window | Temporal robustness across regimes |
-| **Status** | ✅ done (this report) | ⏳ Stage 2 of the campaign |
+| Stage | What | Tests | Cost | Status |
+|:-:|---|---|---|:-:|
+| 0 (paired stationary bootstrap on the test window) | Resample within the **same** test return series, preserving serial correlation via stationary block resampling [1] | "Given this fixed test window and these trained checkpoints, how confident are we in the Sharpe estimate?" → sampling uncertainty *within* a fixed window | Seconds on existing CSVs | ✅ §5 |
+| 2 (FNSPID extension to 2024-2025) | Re-evaluate the **same trained checkpoints** on a freshly-scraped, post-training-date test slice | "Does the method work on data that didn't exist at training time?" → out-of-time validation, single new window | ~1 week wall clock for scraping + FinBERT replay + cache build; **0 retraining** | ⏳ planned |
+| 3 (walk-forward CV × bias-free universe) | Independently retrain on rolling calendar windows on a **delisting-aware universe**, paired-bootstrap pooled across windows | "Does the method work across regimes AND on a different universe?" → temporal robustness × universe robustness | 36 retrains, ~3 days HPC | ⏳ planned (combines two checks) |
 
-For the paper we want both. Bootstrap CI today gives us within-window significance (and does so honestly, with serial-correlation-preserving resampling — a vanilla i.i.d. bootstrap on autocorrelated returns under-states the Sharpe SE). Walk-forward CV gives us across-window generalisation. The headline H=60 win at p<0.001 is meaningful in the within-window sense; whether it survives across windows is what Stage 2 will tell us.
+**These are not the same as a sliding train/val/test split inside a fixed dataset.** A regular ML CV cycles which fold is held out within a fixed pool; walk-forward CV in finance independently retrains the model from scratch on calendar window 1, tests on window 2; retrains on window 1+2, tests on window 3; etc. Each window's test set is held out at training time. Walk-forward is the only protocol that produces a truly out-of-sample evaluation repeatable across calendar regimes.
+
+**Why all three?** Bootstrap CI gives within-window significance — it cannot tell you whether you got lucky on this window. FNSPID extension gives one piece of out-of-time evidence — it cannot tell you whether the result depends on the universe construction. Walk-forward × bias-free gives both. Stages 0 → 2 → 3 each strictly subsume the questions of the previous stage, so cumulative evidence compounds.
+
+The headline H=60 win at p<0.001 (§5) is meaningful in the within-window sense; the FNSPID-2025 evaluation (§7.2) will tell us whether it survives on never-seen post-training data; the walk-forward × bias-free combined stage (§7.3) will tell us whether it survives across regimes and universe construction. ICAIF-grade requires all three.
 
 ---
 
