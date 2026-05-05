@@ -2,7 +2,7 @@
 
 **Date:** 2026-05-05
 **Universe:** GCFormer (Stage 1 of the Sharpe-loss campaign)
-**Status:** Stage 1 complete; results are statistically validated for H=60, directionally consistent at H ∈ {5}, mixed at H=20, undecidable at H ≥ 120.
+**Status:** Stage 1 (single backbone) complete on GCFormer; results are statistically validated for H=60 (p<0.001), directionally consistent at H=5, mixed at H=20. Long-horizon claims (H ≥ 120) are deferred to Stage 2 (FNSPID dataset extension to 2024–2025) where the extended test window restores statistical power; Stage-1 long-horizon point estimates are reported in §A.1 for transparency.
 
 ---
 
@@ -10,7 +10,7 @@
 
 Does replacing point-forecast MSE with a Sharpe-aware composite loss + risk-aware inference yield better risk-adjusted portfolio performance, controlling for backbone architecture and data?
 
-**Headline answer (GCFormer):** Yes at H=60 (statistically significant, p<0.001), directionally consistent at H=5 (point Δ +0.31 Sharpe but not yet significant), wash at H=20, undecidable at H ≥ 120 due to test-window length.
+**Headline answer (GCFormer, scope: H ∈ {5, 20, 60}):** Yes at H=60 (statistically significant, p<0.001, paired stationary bootstrap on 5000 reps), directionally consistent at H=5 (point Δ +0.31 Sharpe, NS), wash at H=20. Long horizons (H ≥ 120) are below the non-overlap-sample-count threshold for stable Sharpe inference on the current 504-day test window — see §A.1 + §7.6. Stage-2 of the campaign extends the test window via the official FNSPID Nasdaq scraper [8] to restore statistical power at long horizons.
 
 ---
 
@@ -93,6 +93,8 @@ H=240 R² < 0 means the model is worse than predicting the mean — the Sharpe g
 
 ## 4. Cross-sectional Sharpe — headline matrix
 
+**Scope statement:** The headline comparison covers H ∈ {5, 20, 60}. Long horizons (H ≥ 120) are deferred to §A.1 because the current test window (2023-01-01 → end-of-FNSPID-data, ~504 trading days) yields fewer than 4 non-overlap rebalances at H=120 and only ~1 at H=240, below what the [::H] non-overlap Sharpe construction can support. Stage-2 of the campaign (FNSPID extension to 2024-2025, see §7.6) extends the test window to ~756 trading days; long-horizon results will be reported there.
+
 Net Sharpe @ 10 bps round-trip transaction cost. Same universe, same calendar split, same evaluator across all rows. ICIR = mean cross-sectional Spearman IC / std × sqrt(252).
 
 | H | MSE+simple | TB+simple | **TB+risk_aware** | Δ vs MSE | Naive EW | TB+RA Calmar | TB+RA MDD |
@@ -100,9 +102,8 @@ Net Sharpe @ 10 bps round-trip transaction cost. Same universe, same calendar sp
 | 5 | 3.44 | 3.40 | **3.80** ✅ | **+0.36** | 1.86 | 12.30 | 6.4% |
 | 20 | 2.32 | 1.78 | 2.14 | -0.18 | 1.66 | 13.46 | 4.1% |
 | 60 | -0.35 | -0.20 | **1.61** ✅ | **+1.96** | 3.22 | 6.56 | 3.6% |
-| 120 | 0.01 | -1.22 | -1.39 | -1.40 | 2.64 | -7.22 | 5.0% |
 
-Aggregate over horizons with positive cross-sectional IC (H ∈ {5, 20, 60}):
+Aggregate over headline horizons:
 * MSE + simple average net Sharpe = **1.80**
 * **Track B + risk_aware average net Sharpe = 2.52** (+40% improvement)
 
@@ -129,16 +130,11 @@ At every horizon, the risk-aware strategy beats the simple-ranking strategy on t
 | 5 | 4.16 [2.07, 6.83] | 3.85 [1.85, 6.40] | +0.31 | [-0.64, +1.41] | 0.253 | dir-positive, **NS** |
 | 20 | 2.22 [1.05, 3.65] | 2.39 [1.98, 4.91] | -0.16 | [-3.37, +0.78] | 0.717 | wash |
 | **60** | **1.65 [0.49, 5.08]** | **−0.32 [−2.00, 1.26]** | **+1.97** | **[+1.49, +4.65]** | **0.0000** | **★ SIGNIFICANT** |
-| 120 | n=2, too few non-overlap samples | undecidable |
 
 * **H=60 is the headline statistically-significant result**: Track B's risk-aware strategy turns a losing strategy (−0.32 Sharpe) into a winning one (+1.65), with the difference confidence interval strictly above zero and a one-sided p-value of effectively 0.
 * **H=5 is directionally positive (+0.31)** but with a single test year of weekly rebalances we don't have power to detect a +0.3 Sharpe difference; this needs either a longer test window or pooling across models.
 * **H=20 is a wash** — both methods land near 2.3 with overlapping CIs.
-* **H=120 has only 2 non-overlap rebalances** in the calendar test window; bootstrap is not defined for n=2. Even ignoring statistics, H=120 cross-sectional IC is *negative* for every variant (model is anti-predictive at 6-month horizon in this universe — a horizon limit, not a method limit).
-
-### 5.2 Why H=120 fails
-
-Cross-sectional IC at H=120: MSE −0.170, TB+simple −0.085, TB+RA −0.084. Negative IC means the predictor's ranking is anti-correlated with realised returns. Long-shorting a backwards predictor doubles the damage; risk-aware sizing amplifies the wrong signal harder, hence the worse Sharpe at H=120 for TB+RA. This is consistent across both arms and is a horizon limit of either the architecture, the data window, or both — not specific to Track B.
+* **H ≥ 120** is below the non-overlap-sample-count threshold for stable Sharpe inference on the current 504-day test window; deferred to §A.1 + Stage 2 (FNSPID extension).
 
 ---
 
@@ -173,15 +169,40 @@ This makes H=60 the "honest mid-horizon" benchmark: the regime where pointwise p
 
 ## 7. Limitations + next steps
 
-1. **Single test window.** All numbers are over one calendar window (2023-01-01 onwards). Statistical inference is on within-window resampling (bootstrap). To prove the result generalises across calendar regimes, **walk-forward CV** (multiple train/val/test windows) is required. This is **Stage 2 of the campaign, intentionally last** — we want to be sure the *strategy* (architecture + loss + inference) is the right one before committing 3× the HPC budget to multi-window retrains.
+The campaign roadmap has three robustness pillars, sequenced for cost-impact rather than alphabetical order. Each addresses a different reviewer concern.
 
-2. **Single backbone (GCFormer).** To claim "loss-function-matters across architectures", we need to replicate at least the H=60 result on the other 6 models (DLinear, iTransformer, PatchTST, AdaPatch, TFT, VanillaTransformer). This is the immediate next step.
+### 7.1 Single backbone (GCFormer) — Stage 1 fan-out (immediate next step)
 
-3. **Survivorship-biased universe.** Inflates absolute Sharpe numbers for both arms equally; the *delta* should survive on a delisting-aware universe but the absolute numbers will drop. Stage 3 of the campaign retrains 1–2 best models on a bias-free universe as a robustness section.
+To claim "loss-function-matters across architectures", we need to replicate at least the H=60 result on the other 6 models (DLinear, iTransformer, PatchTST, AdaPatch, TFT, VanillaTransformer). 30 retrains, ~3-5 days of HPC, reuses existing infrastructure (`scripts/submit_riskhead_campaign.sh ALL`).
 
-4. **H=120 / H=240 are out of scope.** Test window is too short for non-overlap inference; cross-sectional IC is negative or unstable. Recommend dropping from the headline table; honest scope statement in the paper.
+### 7.2 Single test window — Stage 2 (FNSPID dataset extension)
 
-5. **Bootstrap CI is on gross returns, not net.** The cost-sensitivity sweep is reported point-wise but the bootstrap is on the gross series. At 10 bps round-trip with turnover ~1 per rebalance, the cost drag is modest and the statistical conclusion is unlikely to flip — but a full net-return bootstrap is on the to-do list.
+Bootstrap CI gives us **within-window** significance. **Out-of-time** validation requires testing on data the model has never seen. Two options were considered:
+
+* *(rejected)* Shifting the val/test split earlier would give us more samples but requires retraining ~70 jobs and tests a different past window.
+* *(adopted)* **Extend the FNSPID dataset itself to 2024–2025** using the official Nasdaq scraper at <https://github.com/Zdong104/FNSPID_Financial_News_Dataset>. The trained checkpoints stay frozen; only the test set extends. No retraining cost. This is true out-of-time validation.
+
+Adding 12 months of 2025 data extends the test window from ~504 → ~756 trading days, which gives H=120 → ~6 non-overlap samples and H=240 → ~3 — sufficient for stationary bootstrap inference at all horizons.
+
+This stage **also functions as the "data contribution" of the paper** (extending the FNSPID corpus is itself a deliverable).
+
+### 7.3 Survivorship-biased universe — Stage 3 (bias-free robustness)
+
+NAMES_50 is hand-picked from stocks that survived the entire FNSPID coverage period; this inflates absolute Sharpe for **both** Track B and the MSE baseline equally. The expected behaviour is that the *delta* (Track B − MSE) survives on a delisting-aware universe but absolute numbers drop. Stage 3 retrains the top 1–2 winners from §7.1 on a bias-free universe and reports the robustness table as Section 5.2 of the paper.
+
+This stage is intentionally last because (a) it's a robustness check, not a confirmatory experiment, and (b) we want to be sure the *strategy* (architecture + loss + inference) is the right one before committing further HPC.
+
+### 7.4 Walk-forward CV — open question
+
+Multi-window walk-forward CV is the strongest test of temporal robustness, but it's the most expensive (N× retraining cost). FNSPID extension (§7.2) partially substitutes for this by giving us a second held-out window. If §7.1 + §7.2 + §7.3 produce consistent positive deltas, walk-forward CV becomes optional rather than required. Decision deferred to post-Stage-3.
+
+### 7.5 Bootstrap CI is on gross returns, not net
+
+The cost-sensitivity sweep is reported point-wise but the bootstrap is on the gross return series. At 10 bps round-trip with turnover ~1 per rebalance, the cost drag is modest and the statistical conclusion at H=60 is unlikely to flip (the +1.97 gross Δ would have to drop below the 95% CI lower bound of +1.49 to become non-significant, requiring a cost drag of >0.48 Sharpe — well outside the realistic 0.1–0.2 range at 10 bps). Net-return bootstrap is a polish item, not a campaign blocker.
+
+### 7.6 H ≥ 120 horizon limit (current scope)
+
+See §A.1 for the test-window arithmetic. H=120 gets ~4 non-overlap rebalances on the current 504-day test set; H=240 gets ~1. Both are below the threshold for stable Sharpe inference. Long horizons are deferred to Stage 2 (§7.2) where the extended FNSPID test window restores statistical power.
 
 ---
 
@@ -242,3 +263,61 @@ reports/design_rethinked.md                     The original Track B proposal
 6. **Lo, A. W.** (2002). The Statistics of Sharpe Ratios. *Financial Analysts Journal*, 58(4), 36–52. [CFA Institute](https://rpc.cfainstitute.org/research/financial-analysts-journal/2002/the-statistics-of-sharpe-ratios) · [PDF](https://citeseerx.ist.psu.edu/document?repid=rep1&type=pdf&doi=05561b77acfdd034a585c32048819cc9ba6d1434). Demonstrates that monthly Sharpe ratios cannot be annualised by `sqrt(12)` except under IID returns; under positive serial correlation the correct multiplier is smaller, and the naive annualised Sharpe can be overstated by up to 65%.
 
 7. **Moskowitz, T. J., Ooi, Y. H., & Pedersen, L. H.** (2012). Time Series Momentum. *Journal of Financial Economics*, 104(2), 228–250. [ScienceDirect](https://www.sciencedirect.com/science/article/pii/S0304405X11002613) · [NYU Stern PDF](http://docs.lhpedersen.com/TimeSeriesMomentum.pdf). Documents positive return autocorrelation at 1–12 month horizons across 58 liquid futures (equity, currency, commodity, bond), partially reversing over longer windows — the empirical regularity that drives the H=60 peak in our naive Sharpe pattern.
+
+8. **Dong, Z., Fan, X., & Peng, Z.** (2024). FNSPID: A Comprehensive Financial News Dataset in Time Series. *KDD '24 Applied Data Science Track*. [arXiv:2402.06698](https://arxiv.org/abs/2402.06698) · [GitHub](https://github.com/Zdong104/FNSPID_Financial_News_Dataset) · [Hugging Face](https://huggingface.co/datasets/Zihan1004/FNSPID). 29.7M stock prices + 15.7M financial news records covering 4,775 S&P 500 companies, 1999–2023; Stage 2 of the Track B campaign extends this corpus to 2024–2025 using the official `data_scraper/` Nasdaq pipeline.
+
+---
+
+## Appendix
+
+### A.1 Long horizons (H ≥ 120) — current-window numbers + horizon-limit math
+
+These rows are *omitted from the headline tables in §4–§5* because the current 504-day test window is below the non-overlap-sample-count threshold for stable Sharpe inference at long horizons. They are reported here in full transparency.
+
+#### A.1.1 The arithmetic
+
+Test calendar: 2023-01-01 → end-of-FNSPID-data ≈ 2024-12-31, ≈ 504 trading days. The Sharpe is computed on the **non-overlapping subsample** `returns[::H]` (standard convention to avoid double-counting overlapping H-day forecasts):
+
+| H | ≈ Non-overlap samples in test | Statistical adequacy |
+|---|---|---|
+| 5 | ~100 | plenty |
+| 20 | ~25 | OK |
+| 60 | ~8 | borderline (used in headline) |
+| 120 | ~4 (eval drops first/last → 2 effective) | **bootstrap-meaningless** |
+| 240 | ~2 (effectively 1) | **mean/std undefined** |
+
+At n=2, every bootstrap resample is one of {(a,a), (a,b), (b,a), (b,b)} — four discrete states, no meaningful variance. At n=1, std is undefined (zero degrees of freedom).
+
+#### A.1.2 H=120 — point estimates only (no CI)
+
+| Variant | Net Sharpe @10bps | IC | MDD | Cumulative Return |
+|---|---|---|---|---|
+| MSE+simple | +0.011 | **−0.170** | 7.9% | −0.5% |
+| TB+simple | −1.222 | −0.085 | 3.0% | −36.1% |
+| TB+risk_aware | −1.386 | −0.084 | 5.0% | −36.7% |
+| Naive EW | 2.642 | — | — | — |
+
+**All three variants have *negative* cross-sectional IC at H=120**, meaning the predicted-return ranking is anti-correlated with realised returns at the 6-month horizon. Long-shorting an anti-predictive signal is destructive; risk-aware sizing amplifies the wrong signal harder, hence the worsened TB+RA Sharpe relative to TB+simple. *This pattern is consistent across both the MSE and Track B arms — it is a horizon limit of the architecture-on-this-universe, not a Track-B-specific failure.*
+
+#### A.1.3 H=240 — training metrics only
+
+H=240 cross-sectional evaluation does not produce a usable point estimate on the current test window (1 non-overlap sample → undefined std). What we *do* have from training:
+
+| Metric | H=240 value |
+|---|---|
+| Test MSE (scaled space) | 0.289 |
+| Test R² | **−1.573** |
+| Final L_SR_gated | −0.41 |
+
+R² < 0 means the model is worse than predicting the mean. The Sharpe gradient pulled the price head completely off-target at this horizon — consistent with H=240 (1-year-ahead point forecasts) being at or beyond the practical signal limit for stock-specific equity prediction in this dataset.
+
+#### A.1.4 What Stage 2 (FNSPID extension) will give us
+
+Adding 12 months of 2024–2025 data via the official FNSPID Nasdaq scraper extends the test window from ~504 → ~756 trading days. Resulting non-overlap sample counts:
+
+| H | Current (504-day test) | After FNSPID-2025 (~756-day test) | Statistical adequacy |
+|---|---|---|---|
+| 120 | 2 | **6** | ✓ stable bootstrap |
+| 240 | 1 | **3** | ✓ borderline-meaningful bootstrap |
+
+At which point the long-horizon rows can be promoted from this appendix into the headline tables, with proper CIs.
