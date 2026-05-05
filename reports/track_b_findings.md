@@ -1,6 +1,6 @@
 # Track B — Findings, Methods, and Statistical Analysis
 
-**Date:** 2026-05-05
+**Date:** 2026-05-06 (updated)
 **Universe:** GCFormer (Stage 1 of the Sharpe-loss campaign)
 **Status:** Stage 1 (single backbone) complete on GCFormer; results are statistically validated for H=60 (p<0.001), directionally consistent at H=5, mixed at H=20.
 
@@ -345,3 +345,43 @@ Adding 12 months of 2024–2025 data via the official FNSPID Nasdaq scraper exte
 | 240 | 1 | **3** | ✓ borderline-meaningful bootstrap |
 
 At which point the long-horizon rows can be promoted from this appendix into the headline tables, with proper CIs.
+
+---
+
+### A.2 B1 — differentiable cross-sectional portfolio Sharpe loss (NEGATIVE RESULT)
+
+**Status:** tested on GCFormer at H ∈ {20, 60}; underperformed Track B v1 (the per-sample Sharpe surrogate) at every measured horizon. Reported here in full so the paper's methods/results sections can cite the ablation as honest due diligence rather than glossing over it.
+
+**Hypothesis tested.** Replace the per-sample Sharpe surrogate `mean(g·pos·r) / std(g·pos·r)` with a differentiable Sharpe over K=32 random "synthetic cross-sections" within each batch, each forming a long/short Kelly-tanh × gate portfolio with leg-normalised weights. The hope: training-time loss exactly matches the inference operation, gradients flow through the same construction, model learns weights that behave well *after* normalisation.
+
+**Result.** B1 retraining produced strictly worse cross-sectional Sharpe than v1, with the gap growing at longer horizons:
+
+| H | MSE+simple | v1+RA (current TB) | B1+simple | **B1+RA** | Δ vs v1+RA |
+|---|---|---|---|---|---|
+| 20 | 2.32 | 2.14 | 2.25 | **0.39** | **−1.75** |
+| 60 | −0.35 | **+1.61** | −1.15 | **−0.18** | **−1.79** |
+
+**Diagnostic — the price head over-degraded.** Final-epoch test R² across the two variants:
+
+| H | v1 R² | B1 R² | Δ |
+|---|---|---|---|
+| 5 | 0.957 | 0.961 | +0.004 |
+| 20 | 0.806 | 0.749 | −0.057 |
+| 60 | 0.748 | **0.360** | **−0.388** |
+
+At H=60 the B1 Sharpe gradient was 3–4× more negative than v1's at the same epoch (−0.78 vs −0.24 final), reflecting much stronger gradient signal — but it pulled the price head off-target by 39 percentage points of R². The σ + gate machinery could not compensate for a μ̂ this degraded.
+
+**Why we believe the synthetic-cross-section formulation is the issue.** Random batch partitioning produces "cross-sections" where the K micro-portfolios contain stocks at different calendar dates. The portfolio returns these compute are statistical-noise blobs, not actual portfolios. The loss is therefore much higher-variance than v1's per-sample surrogate, but does not measure anything more meaningful than v1 did. Specifically, A1 corollary 5.1 predicts the Sharpe-edge equals the σ-weighted variance of per-stock Kelly scores **at a fixed timestamp** — this requires actual cross-sectional structure, which random partitioning destroys.
+
+**A1 explains the failure pattern.** The price-head degradation was largest at H=60 — exactly where (per A1 corollary 5.1) the σ-aware Sharpe gradient pulls hardest against MSE because cross-sectional σ-heterogeneity is largest. B1's stronger but lower-quality gradient over-shot that trade-off; v1's weaker but accurate gradient stayed in the favourable region. The theory is *consistent with* the failure even though the experiment failed.
+
+**Implications for the paper.**
+* The headline architectural contribution (RiskAwareHead + composite loss + risk-aware inference, v1) stands unchanged.
+* B1 is reported as a tested-but-unsuccessful extension; the paper's "future work" section flags **calendar-aligned cross-sectional sampling** as the likely correct path, requiring a data-pipeline rebuild we did not undertake in this submission cycle.
+* A1 is unaffected — the theorem is independent of which Sharpe formulation is used during training.
+
+**Files for reproducibility.**
+* `engine/losses.py` `CompositeRiskLoss(use_xs_sharpe=True, xs_n_subgroups=K)` — the B1 path.
+* `tests/test_xs_sharpe.py` — 4 unit tests confirming the path is finite, gradients flow, and the loss differs from v1.
+* `Smoke_test/results/summary_xs_GCFormer_global_H{20,60}_long_short_riskhead_xs{,_RA}.json` — raw B1 evaluation outputs.
+* Checkpoints `GCFormer_global_H{20,60}_riskhead_xs.pth` on HPC (and synced to local).
