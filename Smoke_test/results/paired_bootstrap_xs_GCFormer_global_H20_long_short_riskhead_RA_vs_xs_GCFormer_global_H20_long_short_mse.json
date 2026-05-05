@@ -1,0 +1,29 @@
+{
+  "label_a": "TrackB+RA",
+  "label_b": "MSE+simple",
+  "csv_a": "timeseries_xs_GCFormer_global_H20_long_short_riskhead_RA.csv",
+  "csv_b": "timeseries_xs_GCFormer_global_H20_long_short_mse.csv",
+  "n_returns": 12,
+  "horizon": 20,
+  "n_boot": 5000,
+  "expected_block": 5.0,
+  "point_sharpe_a": 2.2207492973269805,
+  "point_sharpe_b": 2.385429305839435,
+  "point_sharpe_diff": -0.16468000851245446,
+  "ci95_a": {
+    "lo": 1.0474186422740797,
+    "median": 2.2207492973269805,
+    "hi": 3.6544914969525504
+  },
+  "ci95_b": {
+    "lo": 1.9768511384051153,
+    "median": 2.623097174922999,
+    "hi": 4.907959019178091
+  },
+  "ci95_diff": {
+    "lo": -3.3718649842473845,
+    "median": -0.17435322230804196,
+    "hi": 0.781707536615937
+  },
+  "p_one_sided_a_le_b": 0.7166
+}

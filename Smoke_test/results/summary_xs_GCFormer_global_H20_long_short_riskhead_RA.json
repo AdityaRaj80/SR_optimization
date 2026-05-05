@@ -1,0 +1,85 @@
+{
+  "model": "GCFormer",
+  "method": "global",
+  "horizon": 20,
+  "mode": "long_short",
+  "strategy": "risk_aware",
+  "use_risk_head": true,
+  "ckpt_suffix": "_riskhead",
+  "gate_threshold": 0.0,
+  "alpha_pos": 5.0,
+  "best_top_n": 5,
+  "n_test_timestamps": 12,
+  "gross_metrics": {
+    "gross_sharpe": 2.220749297326981,
+    "gross_sortino": 4.204179404562963,
+    "gross_calmar": 14.667995554981342,
+    "gross_mdd": 0.039809318719806974,
+    "gross_cumulative_return": 0.5223344801503365,
+    "gross_annualized_return": 0.5839229100289642,
+    "gross_hit_rate": 0.75
+  },
+  "cost_sensitivity": {
+    "0.0": {
+      "cost_bps_round_trip": 0.0,
+      "net_sharpe": 2.220749297326981,
+      "net_sortino": 4.204179404562963,
+      "net_calmar": 14.667995554981342,
+      "net_mdd": 0.039809318719806974,
+      "net_cumulative_return": 0.5223344801503365,
+      "net_annualized_return": 0.5839229100289642,
+      "net_hit_rate": 0.75,
+      "avg_turnover_per_rebalance": 1.3875440155155723
+    },
+    "5.0": {
+      "cost_bps_round_trip": 5.0,
+      "net_sharpe": 2.178009628012271,
+      "net_sortino": 4.023644951994951,
+      "net_calmar": 14.048591592092842,
+      "net_mdd": 0.04061794659024398,
+      "net_cumulative_return": 0.5100894134706707,
+      "net_annualized_return": 0.5706249429557777,
+      "net_hit_rate": 0.75,
+      "avg_turnover_per_rebalance": 1.3875440155155723
+    },
+    "10.0": {
+      "cost_bps_round_trip": 10.0,
+      "net_sharpe": 2.1352906412896933,
+      "net_sortino": 3.851671103017877,
+      "net_calmar": 13.455851354926242,
+      "net_mdd": 0.041426574460680876,
+      "net_cumulative_return": 0.49793385548540714,
+      "net_annualized_return": 0.5574298280867056,
+      "net_hit_rate": 0.75,
+      "avg_turnover_per_rebalance": 1.3875440155155723
+    },
+    "20.0": {
+      "cost_bps_round_trip": 20.0,
+      "net_sharpe": 2.0499219867991045,
+      "net_sortino": 3.531151976517675,
+      "net_calmar": 12.344283663702026,
+      "net_mdd": 0.04304383020155467,
+      "net_cumulative_return": 0.47388891178084563,
+      "net_annualized_return": 0.5313452499802152,
+      "net_hit_rate": 0.75,
+      "avg_turnover_per_rebalance": 1.3875440155155723
+    },
+    "50.0": {
+      "cost_bps_round_trip": 50.0,
+      "net_sharpe": 1.7944996317312185,
+      "net_sortino": 2.7241127773494234,
+      "net_calmar": 9.509961166610502,
+      "net_mdd": 0.04789559742417626,
+      "net_cumulative_return": 0.4038417079630906,
+      "net_annualized_return": 0.4554852715555262,
+      "net_hit_rate": 0.75,
+      "avg_turnover_per_rebalance": 1.3875440155155723
+    }
+  },
+  "cross_sectional_IC_mean": 0.11532075364836038,
+  "cross_sectional_ICIR": 11.446108752111337,
+  "naive_eqw_sharpe": 1.6629950340898048,
+  "naive_eqw_mdd": 0.05415994622607867,
+  "naive_eqw_cumulative_return": 0.2707271249003572,
+  "pointwise_per_stock_sharpe_median": 0.9409016365604433
+}
