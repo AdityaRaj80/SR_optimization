@@ -67,6 +67,17 @@ def main():
                              'before wrapping in RiskAwareHead (Track B fine-tune mode). '
                              'state_dict keys without a "backbone." prefix are loaded into the '
                              'backbone; sigma_head / vol_head are randomly initialised.')
+    parser.add_argument('--use_xs_sharpe', action='store_true',
+                        help='Track B v2 (B1): replace the per-sample Sharpe surrogate with a '
+                             'differentiable cross-sectional portfolio Sharpe — each batch is split '
+                             'into K random micro-cross-sections, each forms a long/short '
+                             'Kelly-tanh×gate portfolio with leg normalisation, and L_SR is the '
+                             'Sharpe across the K portfolio returns. The training-time loss is '
+                             'now the same operation as the inference strategy.')
+    parser.add_argument('--xs_n_subgroups', type=int, default=32,
+                        help='Number of micro-cross-sections per batch (B1 only). '
+                             'Larger K = more Sharpe samples per gradient step; default 32 with '
+                             'batch_size=512 gives chunks of 16 samples each.')
     args = parser.parse_args()
 
     if args.device == 'hpc':
@@ -144,7 +155,10 @@ def main():
     # Setup trainer
     trainer = Trainer(args, model, device)
 
-    suffix = "_riskhead" if args.use_risk_head else ""
+    if args.use_risk_head:
+        suffix = "_riskhead_xs" if args.use_xs_sharpe else "_riskhead"
+    else:
+        suffix = ""
     save_name = f"{args.model}_{args.method}_H{args.horizon}{suffix}.pth"
     save_path = os.path.join(MODEL_SAVE_DIR, save_name)
 
@@ -182,7 +196,10 @@ def main():
 
     # Save results — both scaled-space (MSE/MAE/R²) and dollar-space metrics.
     # Dollar metrics are absent if close_min/max were not exposed by the data loader.
-    res_suffix = "_riskhead" if args.use_risk_head else ""
+    if args.use_risk_head:
+        res_suffix = "_riskhead_xs" if args.use_xs_sharpe else "_riskhead"
+    else:
+        res_suffix = ""
     res_path = os.path.join(RESULTS_DIR, f"{args.method}_results{res_suffix}.csv")
     row = {
         "Model": args.model,

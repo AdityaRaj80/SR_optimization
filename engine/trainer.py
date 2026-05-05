@@ -54,8 +54,13 @@ class Trainer:
         # for back-compat with callers that don't set the flag.
         self.use_risk_head = bool(getattr(args, 'use_risk_head', False))
         if self.use_risk_head:
-            self.criterion = CompositeRiskLoss().to(device)
-            print(f"[Trainer] CompositeRiskLoss active. "
+            use_xs = bool(getattr(args, 'use_xs_sharpe', False))
+            xs_K = int(getattr(args, 'xs_n_subgroups', 32))
+            self.criterion = CompositeRiskLoss(
+                use_xs_sharpe=use_xs, xs_n_subgroups=xs_K
+            ).to(device)
+            xs_msg = f" (xs-portfolio loss, K={xs_K})" if use_xs else " (per-sample Sharpe)"
+            print(f"[Trainer] CompositeRiskLoss active{xs_msg}. "
                   f"Schedule: phase1<{self.criterion._phase1_end} (MSE-only) "
                   f"-> phase2<{self.criterion._phase2_end} (alpha=0.3) "
                   f"-> phase3 (alpha=0.7).")

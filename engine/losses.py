@@ -94,6 +94,16 @@ class CompositeRiskLoss(nn.Module):
         # Schedule boundaries (epoch indices, 0-based)
         phase1_end: int = 5,
         phase2_end: int = 15,
+        # B1 (differentiable cross-sectional portfolio layer) toggles.
+        # When `use_xs_sharpe=True`, L_SR is computed as the Sharpe of K
+        # synthetic-cross-section portfolio returns per batch, where each
+        # micro-cross-section is a random partition of the batch. Each
+        # micro-portfolio uses the SAME long/short Kelly-tanh × gate
+        # weighting + leg normalisation that the inference strategy uses,
+        # so the training-time loss now exactly mirrors the inference-time
+        # portfolio construction. See reports/track_b_findings.md §B1.
+        use_xs_sharpe: bool = False,
+        xs_n_subgroups: int = 32,
     ):
         super().__init__()
         # Constant coefficients
@@ -118,6 +128,9 @@ class CompositeRiskLoss(nn.Module):
         # Schedule
         self._phase1_end = int(phase1_end)
         self._phase2_end = int(phase2_end)
+        # B1 toggles
+        self.use_xs_sharpe = bool(use_xs_sharpe)
+        self.xs_n_subgroups = int(xs_n_subgroups)
 
     # ───────────────────────────────────────────────── schedule ──
     def step_epoch(self, epoch: int) -> None:
@@ -194,11 +207,50 @@ class CompositeRiskLoss(nn.Module):
         gate = gate_vol * gate_sigma                                 # [B], in [0, 1]
 
         # ─── L_SR_gated: per-batch differentiable Sharpe of GATED returns ───
-        strat_return = gate * position * true_return_H               # [B]
-        sr_mean = strat_return.mean()
-        # Use `unbiased=False` to be safe at tiny batch sizes; eps protects div0.
-        sr_std = strat_return.std(unbiased=False) + self.eps_sharpe
-        L_SR_gated = -(sr_mean / sr_std)
+        if self.use_xs_sharpe:
+            # B1 path: differentiable cross-sectional portfolio layer.
+            # Partition the batch into K random "synthetic cross-sections".
+            # In each, compute long-short normalized weights from
+            # (Kelly-tanh × gate) — same operation as the inference strategy
+            # — and form a portfolio return. Sharpe is mean / std across the
+            # K portfolio returns.
+            B = mu_return_H.shape[0]
+            K = max(2, min(self.xs_n_subgroups, B // 2))
+            # Randomly assign each sample to a group; trim to be divisible.
+            chunk = B // K
+            B_used = chunk * K
+            perm = torch.randperm(B_used, device=mu_return_H.device)
+            mu_p   = mu_return_H[perm].view(K, chunk)
+            sig_p  = sigma[perm].view(K, chunk)
+            gate_p = gate[perm].view(K, chunk)
+            ret_p  = true_return_H[perm].view(K, chunk)
+
+            # Kelly-tanh raw weights, gated.  shape: [K, chunk]
+            raw = torch.tanh(self.alpha_pos * mu_p / (sig_p + self.eps_sigma)) * gate_p
+
+            # Long-short leg normalisation (each leg's |weights| sum to 1
+            # within each cross-section so portfolios are gross-2x by
+            # construction and comparable across batches).
+            pos_part =  raw.clamp(min=0.0)
+            neg_part = (-raw).clamp(min=0.0)
+            pos_sum = pos_part.sum(dim=1, keepdim=True) + 1e-9
+            neg_sum = neg_part.sum(dim=1, keepdim=True) + 1e-9
+            long_w  = pos_part / pos_sum
+            short_w = neg_part / neg_sum
+            w = long_w - short_w                                # [K, chunk]
+            port_return = (w * ret_p).sum(dim=1)                # [K]
+
+            sr_mean = port_return.mean()
+            sr_std  = port_return.std(unbiased=False) + self.eps_sharpe
+            L_SR_gated = -(sr_mean / sr_std)
+        else:
+            # Legacy path (Track-B v1): per-sample Sharpe of `gate × position
+            # × realised_return`. Surrogate that correlates with portfolio
+            # Sharpe but does not match it exactly.
+            strat_return = gate * position * true_return_H           # [B]
+            sr_mean = strat_return.mean()
+            sr_std = strat_return.std(unbiased=False) + self.eps_sharpe
+            L_SR_gated = -(sr_mean / sr_std)
 
         # ─── L_GATE_BCE: gate should match realized profitability ───
         # We compute BCE manually (mathematically identical to
